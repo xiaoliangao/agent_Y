@@ -3,6 +3,8 @@
 > 状态：选题已定 · 环境/仓库已就绪（Phase 0 完成）· 下一站 **M1**。
 > 仓库：`git@github.com:xiaoliangao/agent_Y.git`（工作目录 `/home/ubuntu/coding_agent`）。
 
+> ⚠️ **技术栈/形态以 [`docs/PRD.md`](./PRD.md) 为准**：经产品讨论已确定 **Python 运行时 + 多 Provider 原生适配(BYOK) + macOS 桌面 GUI(pywebview + Web 前端, 首屏 chat+trace)**，取代本文下方早期的 TypeScript 假设。本文的**架构思想、里程碑、Eval 自进化闭环设计仍然有效**，但**语言相关的代码骨架（§2 技术栈、§3.2 接口示例、§5 第一周清单）将按 Python 同步重写**（待办）。
+
 ---
 
 ## 1. Context（为什么是这个选题）
