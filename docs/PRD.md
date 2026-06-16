@@ -3,10 +3,11 @@
 | 字段 | 值 |
 |---|---|
 | 产品工作名 | **Agent Y**（repo `agent_Y`） |
-| 文档版本 | v0.1（首版） |
+| 文档版本 | v0.2（review 中） |
 | 日期 | 2026-06-16 |
-| 负责人 | xiaoliangao（开发 + 产品） |
-| 状态 | 草案 / 持续完善 |
+| 负责人 | xiaoliangao（产品 + 开发） |
+| 团队 | 2 人（作者 + 1 位同事；分工待 PRD 定稿后确定） |
+| 状态 | review 中 / 持续完善 |
 | 关联文档 | `docs/plan.md`（落地/里程碑计划，技术栈以本 PRD 为准） |
 
 ---
@@ -37,6 +38,11 @@
 - 不做模型托管/自训练；只做**调用与编排**。
 - 不做插件市场、团队协作、移动端。
 - 不追求覆盖所有 OS 的像素级原生；**v1 锁定 macOS**（架构跨平台友好，Win/Linux 后置）。
+
+### 2.4 设计原则（本轮讨论敲定）
+- **CLI 先行，渐进成 app**：先做命令行版把内核跑通，再做桌面 app；**app 内嵌终端（兼容 CLI）**，CLI 始终是一等公民。
+- **助手要轻**：日常事务/个人助手侧刻意保持**轻量**——核心就三样：**提醒待办、把常做的事务沉淀成 skill、完善的 memory**；不堆重功能。
+- **核心解耦 GUI**：后端是本地服务，CLI / 桌面 app / 未来其它外壳都只是它的客户端。
 
 ---
 
@@ -71,9 +77,9 @@
 > 每条给出用户故事 + 验收标准（节选关键项）。
 
 ### F1. 模型与 Provider 管理（BYOK） — P0
-- **F1.1 多 Provider 原生适配** [P0/P1]：定义统一 `LLMProvider` 接口（chat/stream、工具调用、tool_result、stop_reason、usage/token、thinking 归一化）；每家 Provider 写**原生适配器**（非兼容 shim）。
-  - 交付节奏：**Anthropic（M1）→ OpenAI 原生（M3）→ Gemini 原生 + 本地(Ollama/LM Studio)（M5）**。
-  - 验收：新增一个 Provider = 新增一个适配器文件，不改 loop/可观测/eval 内核。
+- **F1.1 Provider 适配（BYOK）** [P0]：统一 `LLMProvider` 接口（chat/stream、工具调用、tool_result、stop_reason、usage/token、thinking 归一化）。范围**简化为 Claude 原生 + OpenAI 兼容端点**——一个 OpenAI 兼容适配器即覆盖 **GPT / DeepSeek / 本地 Ollama·LM Studio / 多数云厂商**（用户填 base_url + key 即可）。
+  - 交付节奏：**Anthropic 原生（M1）→ OpenAI 兼容适配器（M3）**；Gemini 等若不兼容 OpenAI，走其 OpenAI-兼容模式或后置。
+  - 验收：新增一个端点 = 配置 base_url + key，不改 loop/可观测/eval 内核。
 - **F1.2 连接管理（BYOK）** [P0]：用户故事——"作为用户，我能添加一个连接（选 Provider + 填 API key + 可选 base_url），保存后在模型下拉里选到它的模型。"
   - 验收：key 经 **OS keychain 加密存储**（macOS Keychain，via `keyring`），明文不落盘、不进日志；删除连接即清密钥。
 - **F1.3 模型选择与能力声明** [P0]：每个模型带能力元数据（是否支持 tool use / thinking / 上下文窗口 / 价格）。
@@ -88,7 +94,7 @@
 - **F2.2 统一 Tool 插件接口** [P0]：name / description / input schema(Pydantic) / readOnly 并行提示 / execute(input, ctx)。注册表 + 按名分发。
 - **F2.3 内置工具** [P0]：bash、read_file、write_file、edit_file（编码场景所需最小集）。
 - **F2.4 子 Agent / 编排** [P1]：orchestrator 可派生 subagent（隔离子上下文、独立工具集、结果回传父级）。
-- **F2.5 记忆 / 会话** [P1]：会话持久化；跨会话记忆（文件式，供自进化写 few-shot 记忆）。
+- **F2.5 记忆 / 会话** [P0 最小 / P1 完善]：MVP 含最小会话持久化；**完善的 memory 系统**（跨会话长期记忆、按相关性召回、供自进化写 few-shot）列为**重点 P1**——这是"轻量个人助手"体验的关键，参考 `cc-resourcecode/memdir/`。
 
 ### F3. 可观测（Tracing） — P0
 - **F3.1 执行轨迹采集** [P0]：每次运行产出一棵 span 树（run → 每步 LLM 调用 / 工具调用 / 决策），记录输入输出摘要、token、延迟、父子关系。
@@ -106,9 +112,12 @@
 - 注册编码工具集 + 提供编码 Eval 数据集；在 Docker 沙箱内执行。
 - 验收：给定"修复失败测试"任务，agent 在沙箱内完成并跑通测试。
 
-### F6. 日常事务场景插件 — P1
-- 接入 1~3 个工具（日程/邮件/文档/检索）+ 其 Eval。
-- 验收：接入后**未改动 runtime/可观测/eval 内核**即跑通——证明换场景只写插件。
+### F6. 轻量个人助手场景插件 — P1（MVP 之后，刻意保持轻）
+- **F6.1 待办提醒**：记录 / 提醒待办事项（简单，不堆功能）。
+- **F6.2 常用事务 → Skill**：把你经常处理的事务沉淀成可复用 skill（参考 `cc-resourcecode/skills/`：description + 何时用 + 工具集，按需加载）。
+- **F6.3 依托 F2.5 的 memory**：助手"懂你"靠完善的记忆系统。
+- 验收：接入后**未改动 runtime/可观测/eval 内核**即跑通——证明换场景只写插件；整体体验**轻量**，不做重型 PIM。
+- 候选实现：待办/提醒后端可作为**独立 Spring Boot(Java) 服务**（见 §13），边界清晰、适合并行开发与简历。
 
 ### F7. 桌面 GUI — P0
 - **F7.1 主界面（split view）** [P0]：左 Chat、右 Execution Trace（见 §8 线框）。
@@ -208,9 +217,9 @@
 
 | 里程碑 | 内容 | 验收 |
 |---|---|---|
-| **M1 Runtime 最小闭环**(P0) | 手写 loop + Tool 接口 + 内置工具 + Docker 沙箱 + console tracer + **Anthropic 适配器** | 沙箱里把失败测试改绿 |
-| **M2 可观测 + GUI 骨架**(P0) | Langfuse 接入；FastAPI 后端 + 最小 Web 前端 split view(chat+trace)，pywebview 起 `.app` | GUI 里跑一次任务、看到实时 trace |
-| **M3 Eval harness + OpenAI 适配**(P0) | 编码任务集 + 一键跑出基线通过率；**OpenAI 原生适配器** + BYOK 连接管理 UI + keychain | `运行 Eval` 出 pass@1；能切换 Claude/OpenAI 跑同一任务 |
+| **M1 Runtime 最小闭环 (CLI)**(P0) | **命令行版**：手写 loop + Tool 接口 + 内置工具 + Docker 沙箱 + console tracer + **Anthropic 适配器** | CLI 里给个编码任务，沙箱里把失败测试改绿 |
+| **M2 可观测 + 桌面 app 骨架**(P0) | Langfuse 接入；FastAPI 后端 + Web 前端 split view(chat+trace)，pywebview 起 `.app`；**app 内嵌终端(兼容 CLI)** | GUI 里跑一次任务看到实时 trace；能在 app 内开终端用 CLI |
+| **M3 Eval harness + OpenAI 兼容**(P0) | 编码任务集 + 一键跑出基线通过率；**OpenAI 兼容适配器**(GPT/DeepSeek/本地) + BYOK 连接管理 UI + keychain | `运行 Eval` 出 pass@1；能切 Claude/GPT/DeepSeek 跑同一任务 |
 | **M4 自进化闭环 + 看板**(P0) | 据失败自动改进→重跑→仅留提升；Eval 看板出提升曲线 + 改进记录 | 一轮改进确认提升/可解释/可回滚，曲线可视 |
 | **M5 事务场景 + 多 Provider**(P1) | 日常事务插件(1~3 工具)+其 Eval；**Gemini 原生 + 本地模型** + 模型对比榜 | 换场景不改内核；多模型对比可视 |
 | **M6 体验打磨**(P1) | 子agent 编排、会话历史、危险操作确认、打包分发优化 | 可分发 `.app`，多 agent 任务可视 |
@@ -235,12 +244,29 @@
 
 ---
 
-## 12. 待确认项（Open Questions）
-1. **GUI 外壳**：推荐 **pywebview + 前端 React**；是否接受要写一点前端？（备选：纯 Python PySide6/Qt；或先 Streamlit 验证）——**待你确认**。
-2. **前端框架轻重**：React vs 更轻的（Svelte/原生 + htmx）——M2 动手时定。
-3. **编码任务集来源**：自建小任务集（先，M3）vs 后续接 SWE-bench-lite 子集。
-4. **可观测**：Langfuse 自托管 vs OTel + 自建 viewer——M2 定。
-5. **Java 的位置**：是否在某个边界清晰的模块（如沙箱执行器/某后端服务）用 Java 练手并写进简历？（当前默认纯 Python；可后置）
+## 12. 决策记录（本轮敲定）/ 待定
+
+**已敲定**
+- **形态**：CLI 先行 → 桌面 app（内嵌终端兼容 CLI）。深度优先，内核先跑通。
+- **Provider**：Claude 原生 + OpenAI 兼容端点（覆盖 GPT/DeepSeek/本地）。
+- **前端**：由 AI 助手负责实现，作者按效果驱动修改。
+- **助手定位**：轻量（待办提醒 + 常用事务 skill + 完善 memory），列 MVP 之后。
+- **语言**：核心 Python；Java 找一个边界清晰模块承载（见 §13）。
+
+**待定**
+- 前端框架轻重（React vs 更轻方案）——M2 动手定。
+- 编码任务集来源：自建小集（先，M3）vs 后续 SWE-bench-lite 子集。
+- 可观测：Langfuse 自托管 vs OTel + 自建 viewer——M2 定。
+- 自进化机制细节（见 §F4，已提"规则 + LLM 反思"方案，待确认是否够用/要更激进）。
+- 产品正式命名（现 "Agent Y" 为占位）。
+- **团队分工**：待 PRD 定稿后与同事确定。
+
+## 13. 团队与 Java 的位置
+- **团队**：2 人（作者 + 1 位同事）。分工待 PRD 定稿后定。→ 因多人 + 可能多语言，**模块间接口契约须先在「技术设计文档」里约定好**才能并行开发。
+- **Java 候选模块**（"能用上 Java 最好"，挑边界清晰、可独立交付、简历价值高的）：
+  1. **待办/提醒后端服务（Spring Boot）** — 经典 Java 场景（REST + 持久化 + 定时任务），post-MVP，适合同事独立负责。
+  2. **沙箱执行器服务** — 管理 Docker、跑代码/测试，经 HTTP 暴露给 Python 核心；工程味重、边界清晰。
+  - 二选一或都做，约 M5 前后接入；通过明确 API 契约与 Python 核心解耦。
 
 ---
 
