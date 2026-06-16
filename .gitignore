@@ -1,0 +1,19 @@
+# 参考素材：Claude Code 内部源码，仅本地参考，不纳入版本控制
+cc-resourcecode/
+
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+__pycache__/
+*.pyc
+.venv/
+
+# 环境与密钥
+.env
+.env.*
+
+# 编辑器/系统
+.DS_Store
+.idea/
+.vscode/
