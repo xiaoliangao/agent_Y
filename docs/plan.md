@@ -6,6 +6,8 @@
 
 澄清后的目标：**个人、边做边学、可放进简历，但更要功能做扎实——像 Hermes Agent 一样既能帮你处理日常事务（日程/邮件/文档等），也能完成编码任务。** 技术上你真正想吃透的是「多 Agent 编排 + 可观测 + Eval 自进化闭环」这套工程内核。
 
+**首要学习目标（贯穿全程的指北针）：通过这个项目「学会做项目（工程化：结构/测试/可观测/迭代）」+「掌握 Agent 相关（吃透 agent loop、工具/技能体系、多 Agent 编排、Eval 自进化）」。** 因此实现取舍优先考虑「能学到本质 + 工程上立得住」，而非最快出 Demo——关键的 agent loop 要能看懂、能改、能讲清楚。
+
 核心判断：**"coding vs 助手"是伪命题。** 这三件套是与场景**解耦的底座**；编码和日常事务都是底座上的"应用"。因此选题定为：
 
 > 做一个**通用个人 Agent Runtime**，把"多 Agent 编排 + 可观测 + Eval 自进化闭环"做成核心内核；**编码与日常事务都作为一线能力，但分阶段交付**——先用编码场景把 Eval 自进化闭环跑出**可量化效果**（编码任务评分客观，最能证明"自进化"且最有简历说服力），随后把日常事务能力作为**可插拔场景插件**逐个接入做扎实，**不重选题**。
@@ -62,7 +64,7 @@
 
 | 层 | 选型 | 理由 |
 |---|---|---|
-| 语言 | **TypeScript 为主**（与 `cc-resourcecode` 参考一致、利于做 Ink TUI / 桌面端）；编码沙箱评分脚本可用 Python | 你已有 CC 的 TS 源码可借鉴，桌面助手形态契合 |
+| 语言/编排 | **TypeScript + Claude Agent SDK 为主线，但 agent loop 自己写薄封装、不完全藏进 SDK**；编码沙箱评分脚本用 Python | 与学习目标对齐：薄封装能吃透 loop 本质（上下文拼装→LLM→工具调用→结果回灌→终止判断），又不必从零造拖慢工程进度；TS 与 `cc-resourcecode/query.ts`（真实 agent loop）一致、便于边读边懂，后续做 TUI/桌面端也顺 |
 | LLM | **Claude（Opus 4.8 主力 / Sonnet 4.6 跑量 / Haiku 4.5 廉价子任务）** | 默认用最新 Claude；动手前先读 `claude-api` skill 确认 model id 与价格 |
 | 编排 | **Claude Agent SDK**（subagents / tools / hooks 现成），核心 loop 薄封装 | 既学 agent loop 本质，又不必从零造 |
 | 可观测 | **Langfuse（开源自托管）** | 一套搞定 tracing + dataset + eval，简历展示好 |
@@ -107,5 +109,5 @@
 ## 待确认 / 可调整项
 
 - v1 编码任务集来源：自建小任务集（最快）vs 接 SWE-bench-lite 子集（更有说服力但更重）。
-- 语言主线 TS vs Python、编排 SDK vs LangGraph、可观测 Langfuse vs OTel —— M1 动手时定。
+- ~~语言主线 TS vs Python~~ → **已定：TS + Claude Agent SDK，loop 自写薄封装**（见技术栈表，对齐学习目标）。编排 SDK vs LangGraph、可观测 Langfuse vs OTel —— M1 动手时定。
 - 是否需要 M6 桌面外壳，以及形态（TUI / Web / Electron）。
