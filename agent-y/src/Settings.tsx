@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion } from 'motion/react';
 import { X, Plus, Check, Trash2, User, Sparkles, Zap, Loader2, AlertCircle, ChevronDown } from 'lucide-react';
 import {
@@ -6,7 +7,6 @@ import {
   getSettings, putSettings, type Connection, type Settings,
 } from './api';
 
-// ccswitch 式预设：点一下填好 provider + base_url + 示例模型，再填 key 即可
 const PRESETS = [
   { name: 'Claude 官方', provider: 'anthropic', base_url: '', eg: 'claude-sonnet-4-6' },
   { name: 'DeepSeek', provider: 'openai', base_url: 'https://api.deepseek.com', eg: 'deepseek-chat' },
@@ -22,31 +22,42 @@ const APPROVALS = [
 ];
 type TestState = 'loading' | { ok: boolean; latency_ms?: number; error?: string };
 
+// 弹层用 createPortal 挂到 body，避开设置弹窗 overflow 的裁剪
 function Dropdown({ value, options, onChange }: { value: string; options: { v: string; label: string }[]; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
   const cur = options.find((o) => o.v === value);
+  const toggle = () => {
+    if (!open && btn.current) {
+      const r = btn.current.getBoundingClientRect();
+      setRect({ left: r.left, top: r.bottom + 6, width: r.width });
+    }
+    setOpen(!open);
+  };
   return (
-    <div className="relative">
-      <button type="button" onClick={() => setOpen(!open)} className="field flex items-center justify-between text-left">
+    <>
+      <button ref={btn} type="button" onClick={toggle} className="field flex items-center justify-between text-left">
         <span>{cur?.label ?? value}</span>
         <ChevronDown className="w-4 h-4 transition-transform" style={{ color: 'var(--color-ink-3)', transform: open ? 'rotate(180deg)' : 'none' }} />
       </button>
-      {open && (
+      {open && rect && createPortal(
         <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute z-20 mt-1.5 w-full rounded-xl overflow-hidden py-1"
-            style={{ background: 'var(--color-elevated)', border: '1px solid var(--color-line-2)', boxShadow: '0 16px 36px rgba(0,0,0,0.55)' }}>
+          <div className="fixed inset-0 z-[200]" onClick={() => setOpen(false)} />
+          <div className="fixed z-[201] rounded-xl overflow-hidden py-1 rise"
+            style={{ left: rect.left, top: rect.top, width: rect.width, background: 'var(--color-panel)', border: '1px solid var(--color-line-2)', boxShadow: '0 16px 36px rgba(60,40,30,0.2)' }}>
             {options.map((o) => (
               <button key={o.v} type="button" onClick={() => { onChange(o.v); setOpen(false); }}
-                className="w-full text-left px-3.5 py-2.5 text-[13.5px] flex items-center justify-between transition-colors hover:brightness-125"
-                style={o.v === value ? { background: 'rgba(214,168,102,0.12)', color: 'var(--color-gold)' } : { color: 'var(--color-ink-2)' }}>
+                className="w-full text-left px-3.5 py-2.5 text-[13.5px] flex items-center justify-between transition-colors"
+                style={o.v === value ? { background: 'rgba(192,106,77,0.1)', color: 'var(--color-gold)' } : { color: 'var(--color-ink-2)' }}
+                onMouseEnter={(e) => { if (o.v !== value) e.currentTarget.style.background = 'rgba(43,42,39,0.04)'; }}
+                onMouseLeave={(e) => { if (o.v !== value) e.currentTarget.style.background = 'transparent'; }}>
                 {o.label} {o.v === value && <Check className="w-3.5 h-3.5 shrink-0" />}
               </button>
             ))}
           </div>
-        </>
-      )}
-    </div>
+        </>, document.body)}
+    </>
   );
 }
 
@@ -91,11 +102,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="fixed inset-0 z-[120] flex items-center justify-center px-4"
-      style={{ background: 'rgba(7,7,9,0.84)' }} onClick={onClose}>
+      style={{ background: 'rgba(43,42,39,0.42)' }} onClick={onClose}>
       <motion.div initial={{ opacity: 0, scale: 0.985, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.985, y: 10 }} transition={{ type: 'spring', bounce: 0, duration: 0.38 }}
         onClick={(e) => e.stopPropagation()} className="card w-full max-w-2xl max-h-[88vh] flex flex-col overflow-hidden"
-        style={{ boxShadow: '0 40px 90px rgba(0,0,0,0.6)' }}>
+        style={{ boxShadow: '0 40px 90px rgba(60,40,30,0.24)' }}>
         <div className="flex items-center justify-between px-6 h-16 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
           <div className="flex items-center gap-3">
             <span className="font-serif text-2xl tracking-tight">设置</span>
@@ -123,8 +134,8 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                       return (
                         <div key={c.id} onClick={() => !c.active && activateProvider(c.id).then(reloadConns)}
                           className="flex items-center gap-3 px-4 py-3 rounded-xl cursor-pointer transition-all"
-                          style={{ background: 'var(--color-elevated)', border: `1px solid ${c.active ? 'var(--color-gold)' : 'var(--color-line)'}` }}>
-                          <div className="w-2 h-2 rounded-full shrink-0" style={{ background: c.active ? 'var(--color-gold)' : 'var(--color-line-2)', boxShadow: c.active ? '0 0 10px var(--color-gold)' : 'none' }} />
+                          style={{ background: c.active ? 'rgba(192,106,77,0.07)' : 'var(--color-panel)', border: `1px solid ${c.active ? 'var(--color-gold)' : 'var(--color-line)'}` }}>
+                          <div className="w-2 h-2 rounded-full shrink-0" style={{ background: c.active ? 'var(--color-gold)' : 'var(--color-line-2)', boxShadow: c.active ? '0 0 9px var(--color-gold)' : 'none' }} />
                           <div className="min-w-0 flex-1">
                             <div className="text-[13.5px] font-medium">{c.provider}{c.model_default ? ` · ${c.model_default}` : ''}</div>
                             {c.base_url && <div className="text-[11px] font-mono truncate" style={{ color: 'var(--color-ink-3)' }}>{c.base_url}</div>}
@@ -148,7 +159,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                 <div className="flex flex-wrap gap-1.5 mb-4">
                   {PRESETS.map((p, i) => (
                     <button key={p.name} onClick={() => pickPreset(i)} className="px-3 py-1.5 rounded-lg text-[12.5px] font-medium transition-all"
-                      style={preset === i ? { background: 'var(--color-gold)', color: '#1a1408' } : { background: 'var(--color-bg)', color: 'var(--color-ink-2)', border: '1px solid var(--color-line)' }}>
+                      style={preset === i ? { background: 'var(--color-gold)', color: '#fff7f1' } : { background: 'var(--color-panel)', color: 'var(--color-ink-2)', border: '1px solid var(--color-line)' }}>
                       {p.name}
                     </button>
                   ))}

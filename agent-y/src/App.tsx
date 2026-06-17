@@ -242,9 +242,9 @@ export default function App() {
       <AnimatePresence>
         {approval && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[110] flex items-center justify-center px-4" style={{ background: 'rgba(7,7,9,0.84)' }}>
+            className="fixed inset-0 z-[110] flex items-center justify-center px-4" style={{ background: 'rgba(43,42,39,0.42)' }}>
             <motion.div initial={{ opacity: 0, scale: 0.97, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97 }}
-              className="card w-full max-w-md overflow-hidden" style={{ boxShadow: '0 30px 80px rgba(0,0,0,0.5)' }}>
+              className="card w-full max-w-md overflow-hidden" style={{ boxShadow: '0 30px 80px rgba(60,40,30,0.22)' }}>
               <div className="flex items-center gap-3 px-5 h-14" style={{ borderBottom: '1px solid var(--color-line)' }}>
                 <AlertTriangle className="w-4 h-4" style={{ color: 'var(--color-gold)' }} />
                 <span className="font-medium">需要你确认</span>
