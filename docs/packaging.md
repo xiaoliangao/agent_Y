@@ -23,6 +23,13 @@ cd agent-y && npm run build      # 出 dist（desktop 读它）
 python -m desktop.main           # 起后端 + 开窗口
 ```
 
+## 菜单栏后台在线（关窗不退）
+`desktop/main.py` 分两种进程模式：
+- **host**（默认，.app 启动的就是它）：后台线程起 `uvicorn` + macOS **菜单栏图标**(`rumps`)，并 spawn 一个独立的**窗口子进程**。关掉窗口 = 杀窗口子进程 → WebKit 内存释放，**后端在 host 里继续跑**（定时自动化/提醒不断）；点菜单栏「打开 Agent Y」再开一扇新窗，「退出 Agent Y」整体退出。
+- **window**（`AGENTY_MODE=window`）：不起后端，只开一个 pywebview 窗口连已就绪的后端；关窗即本进程退出。窗口还注入了原生「选择文件夹」桥（`window.pywebview.api.pick_folder`，供聊天栏选目录授权）。
+
+`rumps` 仅 macOS，已加进 `[desktop]` extra（`sys_platform=='darwin'`）；**改了 tray 后需重跑 `scripts/build_app.sh`**。若 `rumps` 不可用，自动回退到「单进程单窗、关窗即退」的旧行为，不影响开发态。
+
 ## 工作原理
 - `desktop/main.py`：后台线程起 `uvicorn`（127.0.0.1:8765）→ 等 `/health` → `webview.create_window` 加载 `http://127.0.0.1:8765/`。数据落 `~/.agenty`（`AGENTY_DATA` 可改）。
 - `server/app.py` `_default_frontend()`：开发读 `agent-y/dist`；打包后(`sys.frozen`)读 `sys._MEIPASS/frontend`。末尾 `app.mount("/", StaticFiles(html=True))` 在所有 API 路由之后兜底，不抢 `/sessions` 等。

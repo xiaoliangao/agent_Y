@@ -16,3 +16,21 @@ def test_build_app(monkeypatch, tmp_path):
     app = build_app()
     assert app.title == "Agent Y"
     assert (tmp_path / "data").exists()  # create_app 已建数据目录
+
+
+def test_mode_default_and_window(monkeypatch):
+    import desktop.main as dm
+
+    monkeypatch.delenv("AGENTY_MODE", raising=False)
+    assert dm._mode() == "host"
+    monkeypatch.setenv("AGENTY_MODE", "window")
+    assert dm._mode() == "window"
+
+
+def test_window_argv_dev(monkeypatch):
+    import sys
+
+    import desktop.main as dm
+
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    assert dm._window_argv() == [sys.executable, "-m", "desktop.main"]

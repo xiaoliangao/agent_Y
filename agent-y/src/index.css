@@ -77,3 +77,15 @@ textarea, input { font-family: inherit; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
 @keyframes ring { 0% { transform: scale(.85); opacity: .5; } 100% { transform: scale(1.9); opacity: 0; } }
+
+/* 呼吸灯：状态点柔和明暗 + 光晕脉动 */
+@keyframes glow {
+  0%,100% { opacity: .55; box-shadow: 0 0 0 0 rgba(91,140,110,0.0); }
+  50%     { opacity: 1;   box-shadow: 0 0 7px 1.5px rgba(91,140,110,0.55); }
+}
+/* IDE diff：逐行揭示 + 末行光标 */
+@keyframes linein { from { opacity: 0; transform: translateX(-5px); } to { opacity: 1; transform: none; } }
+.diff-line { animation: linein .26s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes caret { 0%,100% { opacity: 0; } 50% { opacity: 1; } }
+.caret { display: inline-block; width: 7px; height: 1.05em; vertical-align: text-bottom;
+  background: var(--color-gold); margin-left: 2px; border-radius: 1px; animation: caret 1s step-end infinite; }

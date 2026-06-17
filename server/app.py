@@ -88,8 +88,10 @@ class SettingsIn(BaseModel):
     agent_name: str | None = None
     persona: str | None = None
     default_model: str | None = None
+    models: dict[str, str] | None = None  # 按角色配模型 {orchestrator|subagent|judge: model_id}（F1.4）
     approval_mode: str | None = None
     sandbox: str | None = None  # local | docker
+    weather_city: str | None = None  # 日常面板天气城市（手动）
 
 
 class AutomationIn(BaseModel):
@@ -141,11 +143,19 @@ def _get_provider(app: FastAPI) -> Any:
     return AnthropicProvider()
 
 
-def _active_model(app: FastAPI) -> str:
-    """模型优先级：设置页 default_model → 激活连接 model_default → app.state.model。"""
-    s = app.state.settings.get()
-    if s.get("default_model"):
-        return s["default_model"]
+def _active_model(app: FastAPI, role: str = "orchestrator") -> str:
+    """某角色的有效模型（PRD F1.4）。
+
+    优先级：设置页该角色配模型 → default_model → 激活连接 model_default → app.state.model。
+    role ∈ {orchestrator(主力/会话主 loop)、subagent(子 agent)、judge(eval 评测)}。
+    """
+    s = app.state.settings
+    role_model = s.model_for(role)
+    if role_model:
+        return role_model
+    data = s.get()
+    if data.get("default_model"):
+        return data["default_model"]
     conn = app.state.providers.active()
     if conn and conn.get("model_default"):
         return conn["model_default"]
@@ -235,7 +245,8 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
     workspace = os.path.join(app.state.data_dir, "sessions", sid, "workspace")
     os.makedirs(workspace, exist_ok=True)
     provider = _get_provider(app)
-    model = _active_model(app)
+    model = _active_model(app, "orchestrator")  # 会话主 loop（F1.4）
+    sub_model = _active_model(app, "subagent")  # 子 agent 可配更便宜的跑量模型
     settings = app.state.settings.get()
     system = app.state.settings.effective_system(scenario.system_prompt())  # 人设 + 场景提示词
     approval = _APPROVAL.get(settings.get("approval_mode", ""), app.state.approval_mode)
@@ -256,8 +267,8 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
     from core.tools.subagent import SpawnAgentTool
 
     base_tools = scenario.tools()
-    # 每个会话带 spawn_agent（子 agent 用同一组工具但不含 spawn 自身，防递归）
-    tools = base_tools + [SpawnAgentTool(provider=provider, model=model, tools=base_tools, system=system)]
+    # 每个会话带 spawn_agent（子 agent 用同一组工具但不含 spawn 自身，防递归）；子 agent 走 subagent 角色模型
+    tools = base_tools + [SpawnAgentTool(provider=provider, model=sub_model, tools=base_tools, system=system)]
     eng = SessionEngine(
         provider=provider, tools=tools, system=system,
         sandbox=RecordingSandbox(_sandbox(app, workspace)),  # 记录文件改动供 diff 审阅
@@ -549,6 +560,24 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
     @app.put("/settings")
     async def put_settings(body: SettingsIn, request: Request):
         return {"settings": request.app.state.settings.update(**body.model_dump(exclude_none=True))}
+
+    @app.get("/weather")
+    async def get_weather_ep(request: Request):  # 日常面板：今天/明天天气 + 建议（手动城市）
+        from core.weather import get_weather
+
+        s = request.app.state.settings.get()
+        try:
+            w = await get_weather(
+                city=s.get("weather_city") or "", lat=s.get("weather_lat"),
+                lon=s.get("weather_lon"), label=s.get("weather_label") or "",
+            )
+        except Exception as e:  # noqa: BLE001 - 网络/解析失败不该 500，前端按 ok=False 处理
+            return {"ok": False, "reason": f"{type(e).__name__}"}
+        if w.get("ok") and s.get("weather_lat") is None:  # 首次 geocode 成功 → 缓存经纬度/标签
+            request.app.state.settings.update(
+                weather_lat=w["lat"], weather_lon=w["lon"], weather_label=w["label"]
+            )
+        return w
 
     # ---------- 定时自动化 + review 队列（F6.6）----------
     @app.get("/automations")

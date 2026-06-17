@@ -21,12 +21,15 @@ import sys
 import tempfile
 
 from core.engine import SessionEngine
+from core.eval.assistant_eval import run_assistant_taskset
 from core.eval.compare import compare_models
 from core.eval.harness import run_taskset
 from core.eval.improve import evolve
-from core.eval.taskset import load_taskset
+from core.eval.taskset import load_assistant_taskset, load_taskset
 from core.eval.types import Policy
 from core.harness.approval import ApprovalMode
+from core.harness.fs_access import FolderAccess
+from core.scenarios.assistant.scenario import AssistantScenario
 from core.scenarios.coding.scenario import CodingScenario
 from core.types import Message
 
@@ -190,9 +193,12 @@ async def _improve(args: argparse.Namespace) -> int:
         print("自进化需要 ≥2 个任务（拆 train/val）", file=sys.stderr)
         return 2
     sc = CodingScenario()
-    print(f"自进化 {args.rounds} 轮 @ {args.model} …（每轮：跑分→据失败学经验→重跑→只升才保留）")
+    jm = args.judge_model or args.model
+    judge_note = f"（judge: {jm}）" if jm != args.model else ""
+    print(f"自进化 {args.rounds} 轮 @ {args.model} {judge_note}…（每轮：跑分→据失败学经验→重跑→只升才保留）")
     res = await evolve(tasks, provider=provider, model=args.model,
-                       base_policy=Policy(sc.system_prompt()), tools=sc.tools(), rounds=args.rounds)
+                       base_policy=Policy(sc.system_prompt()), tools=sc.tools(), rounds=args.rounds,
+                       judge_model=args.judge_model)
     print("\npass@1 曲线: " + " → ".join(f"{p * 100:.0f}%" for p in res.curve))
     for i, r in enumerate(res.records, 1):
         flag = "✅保留" if r.kept else "↩️回滚"
@@ -224,6 +230,35 @@ async def _compare(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _eval_assistant(args: argparse.Namespace) -> int:
+    try:
+        provider = _build_provider(args)
+    except RuntimeError as e:
+        print(f"⚠️  {e}", file=sys.stderr)
+        return 1
+    tasks = load_assistant_taskset(args.taskset)
+    if not tasks:
+        print(f"任务集为空: {args.taskset}（需 <id>/meta.json 含 prompt+criteria）", file=sys.stderr)
+        return 2
+    # 助手工具需 FolderAccess：把各任务目录授权为只读，便于读参考文件（自包含任务无副作用）
+    fs = FolderAccess(os.path.join(tempfile.mkdtemp(prefix="agenty-aeval-fs-"), "folders.json"))
+    for t in tasks:
+        if t.workspace:
+            fs.authorize(t.workspace, mode="read_only")
+    sc = AssistantScenario(fs)
+    jm = args.judge_model or args.model
+    print(f"事务类 Eval：{len(tasks)} 个任务 @ {args.model}（judge: {jm}）…")
+    run = await run_assistant_taskset(
+        tasks, provider=provider, model=args.model, system=sc.system_prompt(),
+        tools=sc.tools(), judge_model=args.judge_model,
+    )
+    for r in run.results:
+        flag = "✅" if r.passed else "❌"
+        print(f"  {flag} {r.task_id:22} score={r.score:.2f} (规则{r.rule_score:.2f}/judge{r.judge_score:.2f})")
+    print(f"\n通过率={run.pass_rate * 100:.0f}%  平均分={run.avg_score:.2f}  ({len(run.results)} 任务)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="agenty", description="Agent Y CLI")
     sub = p.add_subparsers(dest="cmd")
@@ -246,12 +281,18 @@ def main(argv: list[str] | None = None) -> int:
     ip = sub.add_parser("improve", help="自进化（据失败改进，仅当提升才保留，出 pass@1 曲线）")
     ip.add_argument("--taskset", required=True, help="任务集目录")
     ip.add_argument("--rounds", type=int, default=2, help="自进化轮数（默认 2）")
+    ip.add_argument("--judge-model", help="反思/评测用模型（F1.4 eval-judge 角色，默认同 --model）")
     _add_provider_args(ip)
 
     cp = sub.add_parser("compare", help="同任务集对比多个模型（通过率/延迟）")
     cp.add_argument("--taskset", required=True, help="任务集目录")
     cp.add_argument("--models", required=True, help="逗号分隔模型 id，如 deepseek-chat,deepseek-reasoner")
     _add_provider_args(cp)
+
+    ap = sub.add_parser("eval-assistant", help="事务类 Eval（规则+LLM-judge 半客观打分）")
+    ap.add_argument("--taskset", required=True, help="事务类任务集目录，如 evals/assistant-v1")
+    ap.add_argument("--judge-model", help="评测用模型（F1.4 eval-judge 角色，默认同 --model）")
+    _add_provider_args(ap)
 
     args = p.parse_args(argv)
     if args.cmd == "run":
@@ -262,6 +303,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_improve(args))
     if args.cmd == "compare":
         return asyncio.run(_compare(args))
+    if args.cmd == "eval-assistant":
+        return asyncio.run(_eval_assistant(args))
     p.print_help()
     return 0
 

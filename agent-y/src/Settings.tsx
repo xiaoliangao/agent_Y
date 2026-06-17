@@ -100,6 +100,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     catch (e) { setTests((t) => ({ ...t, [id]: { ok: false, error: String(e) } })); }
   };
   const save = async (patch: Partial<Settings>) => setSettings((await putSettings(patch)).settings);
+  const saveModel = async (role: string, value: string) => {  // 按角色配模型（F1.4）：空=删除该角色覆盖
+    const models = { ...(settings?.models || {}) };
+    if (value.trim()) models[role] = value.trim(); else delete models[role];
+    await save({ models });
+  };
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -218,6 +223,33 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                 <div>
                   <div className="label mb-2">代码沙箱</div>
                   <Dropdown value={settings.sandbox || 'local'} options={[{ v: 'local', label: '本机（开发友好）' }, { v: 'docker', label: 'Docker（隔离，需装 Docker）' }]} onChange={(v) => save({ sandbox: v })} />
+                </div>
+              </div>
+              <div>
+                <div className="label mb-2 flex items-center gap-2"><Zap className="w-3.5 h-3.5" /> 按角色配模型（可选，覆盖默认）</div>
+                <div className="grid grid-cols-3 gap-3">
+                  {([['orchestrator', '主力'], ['subagent', '子 Agent'], ['judge', '评测']] as const).map(([role, label]) => (
+                    <div key={role}>
+                      <div className="label mb-1.5">{label}</div>
+                      <input className="field font-mono text-[12px]" placeholder="跟随默认"
+                        value={settings.models?.[role] ?? ''}
+                        onChange={(e) => setSettings({ ...settings, models: { ...(settings.models || {}), [role]: e.target.value } })}
+                        onBlur={(e) => saveModel(role, e.target.value)} />
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[11.5px] mt-2 leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>
+                  分别给会话主力 / 子 Agent / 自动评测指定模型 id（如主力 claude-opus-4-8、跑量 claude-sonnet-4-6、廉价 claude-haiku-4-5）。留空则用上面的默认模型。失焦自动保存。
+                </div>
+              </div>
+              <div>
+                <div className="label mb-2">天气城市（日常面板）</div>
+                <input className="field" placeholder="如 北京 / 上海 / Shanghai" value={settings.weather_city || ''}
+                  onChange={(e) => setSettings({ ...settings, weather_city: e.target.value })}
+                  onBlur={(e) => save({ weather_city: e.target.value })} />
+                <div className="text-[11.5px] mt-2 leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>
+                  手动填城市（隐私优先，不做定位）。助手会用免费的 Open-Meteo 查当天/明天天气并给出建议。
+                  {settings.weather_label ? `已定位：${settings.weather_label}。` : ''}失焦自动保存。
                 </div>
               </div>
             </div>

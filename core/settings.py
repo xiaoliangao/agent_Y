@@ -23,12 +23,22 @@ DEFAULT_PERSONA = """你是 Agent Y —— 我的个人 AI 助手。
 
 边界：只在我授权的范围内操作，不碰系统级危险操作。"""
 
+# 可按角色单独配模型的角色（PRD F1.4）：主力 orchestrator / 跑量 subagent / 评测 judge。
+# 未配则回退到 default_model（再回退到连接默认 / app 兜底）。
+ROLES = ("orchestrator", "subagent", "judge")
+
 _DEFAULTS = {
     "agent_name": "Agent Y",
     "persona": "",  # 空 = 不额外注入；UI 可用 DEFAULT_PERSONA 预填
     "default_model": "",
+    "models": {},  # 按角色配模型：{"orchestrator":..,"subagent":..,"judge":..}；空=用 default_model（F1.4）
     "approval_mode": None,  # None = 沿用 app 默认；显式设了才覆盖。read_only|ask|auto|full
     "sandbox": "local",  # local（宿主机跑，开发友好）| docker（容器隔离，需装 Docker）
+    # 日常面板天气（手动城市，隐私优先；lat/lon/label 为 geocode 后的缓存，UI 不直接编辑）
+    "weather_city": "",
+    "weather_lat": None,
+    "weather_lon": None,
+    "weather_label": "",
 }
 
 
@@ -53,15 +63,31 @@ class SettingsStore:
         return dict(self._data)
 
     def update(self, **fields) -> dict:
+        # 改了城市 → 作废 geocode 缓存（下次 /weather 重新解析）
+        if "weather_city" in fields and (fields.get("weather_city") or "") != self._data.get("weather_city"):
+            self._data.update(weather_lat=None, weather_lon=None, weather_label="")
         for k, v in fields.items():
-            if k in _DEFAULTS and v is not None:
+            if k not in _DEFAULTS or v is None:
+                continue
+            if k == "models" and isinstance(v, dict):
+                self._data["models"] = self._clean_models(v)  # 整体替换（UI 传完整 models 对象）
+            else:
                 self._data[k] = v
         self._save()
         return self.get()
 
+    @staticmethod
+    def _clean_models(m: dict) -> dict:
+        """只留已知角色、去掉空值（空=回退到 default_model）。"""
+        return {r: str(m[r]).strip() for r in ROLES if (m.get(r) or "").strip()}
+
     @property
     def persona(self) -> str:
         return self._data.get("persona", "") or ""
+
+    def model_for(self, role: str) -> str:
+        """该角色单独配置的模型 id；未配则返回空串（调用方回退到 default_model）。见 PRD F1.4。"""
+        return ((self._data.get("models") or {}).get(role) or "").strip()
 
     def effective_system(self, scenario_prompt: str) -> str:
         """人设(若设置) + 场景提示词。人设决定身份/语气，场景提供工具纪律。"""

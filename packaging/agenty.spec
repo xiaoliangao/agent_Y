@@ -11,7 +11,7 @@ ROOT = os.path.abspath(os.getcwd())
 hiddenimports = []
 for pkg in (
     "uvicorn", "anthropic", "openai", "fastapi", "starlette",
-    "pydantic", "openpyxl", "docx", "pptx", "webview",
+    "pydantic", "openpyxl", "docx", "pptx", "webview", "rumps",
 ):
     hiddenimports += collect_submodules(pkg)
 

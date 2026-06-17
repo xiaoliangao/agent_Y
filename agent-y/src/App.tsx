@@ -3,10 +3,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Plus, Settings as SettingsIcon, Code2, Briefcase, ArrowUp, Check, X,
   AlertTriangle, Activity, MessageSquare, KeyRound, Clock,
+  CloudSun, FolderPlus, CheckSquare, Square,
 } from 'lucide-react';
 import {
   createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile,
-  listProviders, getSettings, listReviews, type Frame, type SessionSummary, type Connection,
+  listProviders, getSettings, listReviews,
+  listTodos, addTodo, patchTodo, listFolders, addFolder, deleteFolder,
+  getWeather, hasNativeFolderPick, pickFolderNative,
+  type Frame, type SessionSummary, type Connection, type Todo, type Folder, type Weather, type WeatherDay,
 } from './api';
 import SettingsPanel from './Settings';
 import AutomationsPanel from './Automations';
@@ -16,25 +20,51 @@ type Step = { id: string; label: string; target?: string; status: 'running' | 'd
 type Approval = Extract<Frame, { type: 'approval_request' }>;
 type FileChange = Extract<Frame, { type: 'file_change' }>;
 
-// 彩色 unified diff 卡片：保留(关掉) / 撤销(写回原内容)
+// IDE 风格动态 diff：编辑器窗框(红黄绿灯+文件标签) + 行号槽 + 逐行揭示动画 + 末行光标。
+// 保留(关掉卡片) / 撤销(写回原内容)。
 function DiffCard({ ch, onKeep, onRevert }: { ch: FileChange; onKeep: () => void; onRevert: () => void }) {
+  const lines = ch.diff.split('\n');
+  // 最后一条新增行 → 末尾打一个闪烁光标，营造"刚敲进去"的动态感
+  const lastAdd = lines.reduce((acc, l, i) => (l[0] === '+' && !l.startsWith('+++') ? i : acc), -1);
+  const adds = lines.filter((l) => l[0] === '+' && !l.startsWith('+++')).length;
+  const dels = lines.filter((l) => l[0] === '-' && !l.startsWith('---')).length;
   return (
-    <div className="rise rounded-xl overflow-hidden mb-3" style={{ border: '1px solid var(--color-line)' }}>
-      <div className="px-3.5 py-2 flex items-center justify-between" style={{ background: 'var(--color-elevated)' }}>
-        <span className="font-mono text-[12.5px]">{ch.path}</span>
-        <div className="flex gap-1.5">
+    <div className="rise rounded-xl overflow-hidden mb-3"
+      style={{ border: '1px solid var(--color-line-2)', boxShadow: '0 10px 28px rgba(60,40,30,0.08)' }}>
+      <div className="flex items-center gap-2 px-3.5 h-9 shrink-0" style={{ background: 'var(--color-elevated)', borderBottom: '1px solid var(--color-line)' }}>
+        <span className="flex gap-1.5">
+          {['#e0796a', '#d9a441', '#5b8c6e'].map((c) => <span key={c} className="w-2.5 h-2.5 rounded-full" style={{ background: c, opacity: 0.85 }} />)}
+        </span>
+        <span className="font-mono text-[12px] ml-1.5 truncate" style={{ color: 'var(--color-ink-2)' }}>{ch.path}</span>
+        <span className="font-mono text-[10.5px] ml-1.5 shrink-0" style={{ color: 'var(--color-ink-3)' }}>
+          <span style={{ color: 'var(--color-ok)' }}>+{adds}</span> <span style={{ color: 'var(--color-danger)' }}>−{dels}</span>
+        </span>
+        <span className="ml-auto flex gap-1.5 shrink-0">
           <button onClick={onRevert} className="btn btn-ghost text-[11px] px-2 py-1">撤销</button>
           <button onClick={onKeep} className="btn btn-gold text-[11px] px-2.5 py-1">保留</button>
-        </div>
+        </span>
       </div>
-      <pre className="text-[11.5px] font-mono leading-[1.55] overflow-x-auto p-3 no-scrollbar" style={{ background: 'var(--color-panel)' }}>
-        {ch.diff.split('\n').map((line, i) => {
-          const c = line[0];
-          const bg = c === '+' ? 'rgba(91,140,110,0.14)' : c === '-' ? 'rgba(191,79,61,0.12)' : 'transparent';
-          const col = c === '+' ? 'var(--color-ok)' : c === '-' ? 'var(--color-danger)' : line.startsWith('@@') ? 'var(--color-gold)' : 'var(--color-ink-2)';
-          return <div key={i} style={{ background: bg, color: col, padding: '0 6px' }}>{line || ' '}</div>;
-        })}
-      </pre>
+      <div className="overflow-x-auto no-scrollbar" style={{ background: 'var(--color-panel)' }}>
+        <pre className="text-[11.5px] font-mono leading-[1.62] py-2">
+          {lines.map((line, i) => {
+            const c = line[0];
+            const isHunk = line.startsWith('@@');
+            const isMeta = line.startsWith('+++') || line.startsWith('---');
+            const add = c === '+' && !isMeta, del = c === '-' && !isMeta;
+            const bg = add ? 'rgba(91,140,110,0.13)' : del ? 'rgba(191,79,61,0.11)' : 'transparent';
+            const col = isHunk ? 'var(--color-gold)' : add ? 'var(--color-ok)' : del ? 'var(--color-danger)' : 'var(--color-ink-2)';
+            const sign = add ? '+' : del ? '−' : '';
+            const text = (isMeta || isHunk) ? line : line.slice(1);
+            return (
+              <div key={i} className="diff-line flex" style={{ background: bg, animationDelay: `${Math.min(i, 50) * 20}ms` }}>
+                <span className="select-none text-right shrink-0" style={{ width: 34, paddingRight: 9, color: 'var(--color-ink-3)', opacity: 0.55 }}>{i + 1}</span>
+                <span className="select-none shrink-0 text-center" style={{ width: 14, color: col }}>{sign}</span>
+                <span style={{ color: col, whiteSpace: 'pre', paddingRight: 14 }}>{text || ' '}{i === lastAdd && <span className="caret" />}</span>
+              </div>
+            );
+          })}
+        </pre>
+      </div>
     </div>
   );
 }
@@ -80,6 +110,34 @@ function AgentOrb({ running, size = 48 }: { running: boolean; size?: number }) {
   );
 }
 
+// 右上角「在线」状态点：呼吸灯。在线=绿点柔和明暗+光晕脉动；运行=金点闪烁+外扩环。
+function StatusDot({ running }: { running: boolean }) {
+  const color = running ? 'var(--color-gold)' : 'var(--color-ok)';
+  return (
+    <span className="relative inline-flex shrink-0" style={{ width: 9, height: 9 }}>
+      {running && <span className="absolute rounded-full" style={{ inset: -3, border: `1.5px solid ${color}`, animation: 'ring 1.4s ease-out infinite' }} />}
+      <span className="m-auto rounded-full" style={{ width: 9, height: 9, background: color,
+        animation: running ? 'blink 1s infinite' : 'glow 2.6s ease-in-out infinite' }} />
+    </span>
+  );
+}
+
+// 日常面板里的单日天气
+function Wx({ day, label }: { day: WeatherDay; label: string }) {
+  return (
+    <div className="text-center flex-1">
+      <div className="text-[11px] mb-1" style={{ color: 'var(--color-ink-3)' }}>{label}</div>
+      <div className="text-[13.5px]" style={{ color: 'var(--color-ink)' }}>{day.text}</div>
+      <div className="text-[12px] mt-1" style={{ color: 'var(--color-ink-2)' }}>
+        {day.tmax != null ? `${Math.round(day.tmax)}°` : '—'}
+        <span style={{ color: 'var(--color-ink-3)' }}> / {day.tmin != null ? `${Math.round(day.tmin)}°` : '—'}</span>
+      </div>
+      {day.precip_prob != null && day.precip_prob >= 30 &&
+        <div className="text-[10.5px] mt-0.5" style={{ color: 'var(--color-gold)' }}>降水 {day.precip_prob}%</div>}
+    </div>
+  );
+}
+
 export default function App() {
   const [scene, setScene] = useState<'coding' | 'assistant'>('assistant');
   const [threads, setThreads] = useState<SessionSummary[]>([]);
@@ -96,6 +154,10 @@ export default function App() {
   const [pendingReviews, setPendingReviews] = useState(0);
   const [conns, setConns] = useState<Connection[]>([]);
   const [agentName, setAgentName] = useState('Agent Y');
+  const [weather, setWeather] = useState<Weather | null>(null);
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [newTodo, setNewTodo] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamId = useRef<string | null>(null);
 
@@ -105,7 +167,30 @@ export default function App() {
     getSettings().then((d) => setAgentName(d.settings.agent_name || 'Agent Y')).catch(() => {});
     listReviews('pending').then((r) => setPendingReviews(r.length)).catch(() => {});
   };
-  useEffect(() => { refreshThreads(); refreshConfig(); }, []);
+  // 日常面板数据：当天待办 + 天气 + 已授权目录（助手场景用）
+  const refreshDaily = () => {
+    listTodos().then(setTodos).catch(() => {});
+    listFolders().then(setFolders).catch(() => {});
+    getWeather().then(setWeather).catch(() => {});
+  };
+  useEffect(() => { refreshThreads(); refreshConfig(); refreshDaily(); }, []);
+  useEffect(() => { if (scene === 'assistant') refreshDaily(); }, [scene]);
+
+  const addNewTodo = async () => {
+    const t = newTodo.trim();
+    if (!t) return;
+    setNewTodo('');
+    await addTodo(t).catch(() => {});
+    refreshDaily();
+  };
+  const toggleTodo = async (td: Todo) => { await patchTodo(td.id, { done: !td.done }).catch(() => {}); refreshDaily(); };
+  const pickFolder = async () => {
+    let path: string | null = null;
+    if (hasNativeFolderPick()) path = await pickFolderNative();
+    else path = window.prompt('输入要授权助手读取的文件夹绝对路径：');
+    if (path && path.trim()) { await addFolder(path.trim()).catch(() => {}); refreshDaily(); }
+  };
+  const removeFolder = async (id: string) => { await deleteFolder(id).catch(() => {}); refreshDaily(); };
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [messages, trace, running]);
 
   const active = conns.find((c) => c.active);
@@ -202,7 +287,7 @@ export default function App() {
             <span style={{ color: 'var(--color-ink-2)' }}>{active ? (active.model_default || active.provider) : '未配置模型'}</span>
           </button>
           <div className="flex items-center gap-2">
-            <AgentOrb running={running} size={13} />
+            <StatusDot running={running} />
             <span className="text-[12px]" style={{ color: 'var(--color-ink-3)' }}>{running ? '思考中…' : '在线'}</span>
           </div>
         </header>
@@ -244,7 +329,9 @@ export default function App() {
                 {changes.length > 0 && (
                   <div className="mt-1 mb-8">
                     <div className="label mb-2.5">本次改动 · {changes.length} 个文件</div>
-                    {changes.map((ch) => <DiffCard key={ch.path} ch={ch} onKeep={() => keepChange(ch.path)} onRevert={() => revertChange(ch)} />)}
+                    {changes.map((ch) => (
+                      <div key={ch.path}><DiffCard ch={ch} onKeep={() => keepChange(ch.path)} onRevert={() => revertChange(ch)} /></div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -253,6 +340,21 @@ export default function App() {
             {/* INPUT */}
             <div className="absolute bottom-0 inset-x-0 px-6 pb-6 pt-12 pointer-events-none" style={{ background: 'linear-gradient(to top, var(--color-bg) 55%, transparent)' }}>
               <div className="max-w-2xl mx-auto pointer-events-auto">
+                {scene === 'assistant' && (
+                  <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                    {folders.map((f) => (
+                      <span key={f.id} className="inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-full text-[11.5px]"
+                        style={{ background: 'var(--color-panel)', border: '1px solid var(--color-line)', color: 'var(--color-ink-2)' }}>
+                        <span className="font-mono truncate max-w-[170px]" title={f.path}>{f.path.split('/').filter(Boolean).pop() || f.path}</span>
+                        <button onClick={() => removeFolder(f.id)} className="opacity-45 hover:opacity-100"><X className="w-3 h-3" /></button>
+                      </span>
+                    ))}
+                    <button onClick={pickFolder} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11.5px] transition-colors"
+                      style={{ border: '1px dashed var(--color-line-2)', color: 'var(--color-ink-3)' }}>
+                      <FolderPlus className="w-3.5 h-3.5" /> {folders.length ? '加文件夹' : '选择文件夹读取'}
+                    </button>
+                  </div>
+                )}
                 <div className="flex items-end gap-2 p-2 rounded-2xl" style={{ background: 'var(--color-panel)', border: '1px solid var(--color-line-2)' }}>
                   <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={1} disabled={running}
                     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); run(); } }}
@@ -286,6 +388,64 @@ export default function App() {
                       </div>
                     </div>
                   ))}
+                </div>
+              </div>
+            </aside>
+          )}
+
+          {/* 日常面板（助手场景）：今日天气 + 待办 */}
+          {scene === 'assistant' && (
+            <aside className="w-[300px] shrink-0 hidden lg:flex flex-col" style={{ background: 'var(--color-panel)', borderLeft: '1px solid var(--color-line)' }}>
+              <div className="h-12 flex items-center px-5" style={{ borderBottom: '1px solid var(--color-line)' }}>
+                <span className="label">今日</span>
+              </div>
+              <div className="flex-1 overflow-y-auto p-5 no-scrollbar space-y-6">
+                <div>
+                  <div className="label mb-2.5 flex items-center gap-2"><CloudSun className="w-3.5 h-3.5" /> 天气{weather?.ok && weather.label ? ` · ${weather.label}` : ''}</div>
+                  {weather?.ok ? (
+                    <div className="card p-3.5" style={{ background: 'var(--color-elevated)' }}>
+                      <div className="flex items-start gap-2">
+                        {weather.today && <Wx day={weather.today} label="今天" />}
+                        {weather.tomorrow && <><span style={{ width: 1, alignSelf: 'stretch', background: 'var(--color-line)' }} /><Wx day={weather.tomorrow} label="明天" /></>}
+                      </div>
+                      {weather.advice && (
+                        <div className="text-[12px] leading-relaxed mt-3 pt-3" style={{ color: 'var(--color-ink-2)', borderTop: '1px solid var(--color-line)' }}>{weather.advice}</div>
+                      )}
+                    </div>
+                  ) : (
+                    <button onClick={() => setShowSettings(true)} className="text-[12.5px] text-left leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>
+                      在设置里填写城市，这里就会显示今天 / 明天天气和出行建议 →
+                    </button>
+                  )}
+                </div>
+
+                <div>
+                  <div className="label mb-2.5">待办</div>
+                  <div className="flex items-center gap-1.5 mb-3">
+                    <input value={newTodo} onChange={(e) => setNewTodo(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') addNewTodo(); }}
+                      placeholder="加一项待办…" className="field py-2 text-[13px]" />
+                    <button onClick={addNewTodo} className="btn btn-gold w-9 h-9 p-0 shrink-0"><Plus className="w-4 h-4" /></button>
+                  </div>
+                  <div className="space-y-0.5">
+                    {todos.filter((t) => !t.done).length === 0 && <div className="text-[12.5px] px-1" style={{ color: 'var(--color-ink-3)' }}>没有待办，清爽。</div>}
+                    {todos.filter((t) => !t.done).map((t) => (
+                      <button key={t.id} onClick={() => toggleTodo(t)} className="w-full flex items-start gap-2 px-1.5 py-1.5 rounded-lg text-left transition-colors hover:bg-[rgba(43,42,39,0.04)]">
+                        <Square className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--color-ink-3)' }} />
+                        <span className="text-[13px]" style={{ color: 'var(--color-ink-2)' }}>{t.text}{t.due && <span className="ml-1.5 text-[11px]" style={{ color: 'var(--color-ink-3)' }}>· {t.due}</span>}</span>
+                      </button>
+                    ))}
+                    {todos.some((t) => t.done) && (
+                      <div className="pt-1.5 mt-1.5" style={{ borderTop: '1px solid var(--color-line)' }}>
+                        {todos.filter((t) => t.done).map((t) => (
+                          <button key={t.id} onClick={() => toggleTodo(t)} className="w-full flex items-start gap-2 px-1.5 py-1.5 rounded-lg text-left transition-colors hover:bg-[rgba(43,42,39,0.04)]">
+                            <CheckSquare className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--color-ok)' }} />
+                            <span className="text-[13px] line-through" style={{ color: 'var(--color-ink-3)' }}>{t.text}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </aside>

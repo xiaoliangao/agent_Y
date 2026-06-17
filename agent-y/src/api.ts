@@ -28,10 +28,20 @@ export interface ModelInfo {
 }
 export interface Settings {
   agent_name: string; persona: string; default_model: string;
+  models?: Record<string, string>;  // 按角色配模型 {orchestrator|subagent|judge}（F1.4）
   approval_mode: string | null; sandbox?: string;
+  weather_city?: string; weather_label?: string;  // 日常面板天气城市（手动）
 }
 export interface Todo { id: string; text: string; done: boolean; due?: string | null; created_at: string; }
 export interface Folder { id: string; path: string; mode: string; }
+export interface WeatherDay {
+  date: string; code: number; text: string;
+  tmax: number | null; tmin: number | null; precip_prob: number | null;
+}
+export interface Weather {
+  ok: boolean; reason?: string; label?: string;
+  today?: WeatherDay | null; tomorrow?: WeatherDay | null; advice?: string;
+}
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${BASE}${url}`, init);
@@ -76,6 +86,15 @@ export const deleteTodo = (id: string) => j(`/todos/${id}`, { method: "DELETE" }
 export const listFolders = () => j<{ folders: Folder[] }>("/folders").then((d) => d.folders ?? []).catch(() => []);
 export const addFolder = (path: string, mode = "read_write") => post("/folders", { path, mode });
 export const deleteFolder = (id: string) => j(`/folders/${id}`, { method: "DELETE" });
+export const getWeather = () => j<Weather>("/weather").catch(() => ({ ok: false } as Weather));
+
+// 原生目录选择：打包的 pywebview 窗口注入了 window.pywebview.api.pick_folder；浏览器 dev 时没有
+export const hasNativeFolderPick = (): boolean =>
+  typeof (window as any).pywebview?.api?.pick_folder === "function";
+export async function pickFolderNative(): Promise<string | null> {
+  try { return (await (window as any).pywebview.api.pick_folder()) || null; }
+  catch { return null; }
+}
 
 // ---------- 定时自动化 + 待审队列 ----------
 export interface Automation {
