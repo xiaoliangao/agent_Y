@@ -231,9 +231,13 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
             os.path.join(app.state.data_dir, "memory"), provider=provider, model=model
         )
     from core.obs.tracer import build_tracer
+    from core.tools.subagent import SpawnAgentTool
 
+    base_tools = scenario.tools()
+    # 每个会话带 spawn_agent（子 agent 用同一组工具但不含 spawn 自身，防递归）
+    tools = base_tools + [SpawnAgentTool(provider=provider, model=model, tools=base_tools, system=system)]
     eng = SessionEngine(
-        provider=provider, tools=scenario.tools(), system=system,
+        provider=provider, tools=tools, system=system,
         sandbox=_sandbox(app, workspace), model=model, approval_mode=approval,
         tracer=build_tracer(console=False), context_manager=context_manager,
         memory_store=memory_store, reflect=memory_store is not None,
