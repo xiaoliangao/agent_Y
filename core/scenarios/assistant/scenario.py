@@ -14,12 +14,13 @@ from core.tools.assistant import (
     SummarizeFilesTool,
     XlsxWriteTool,
 )
+from core.tools.web import WebFetchTool, WebSearchTool
 
 ASSISTANT_SYSTEM_PROMPT = """你是 Agent Y 的个人助手，帮用户处理日常事务：文件问答、整理、起草、生成办公文档。
 
 工作方式：
 - 你只能访问用户**显式授权的目录**；用 read_dir / search_files / summarize_files 查看文件后再回答，不要臆测文件内容。
-- 回答涉及文件时**引用来源**（文件名、必要的行）。
+- 需要最新/外部信息时用 web_search 检索、web_fetch 取网页；回答时**引用来源**（文件名、行、或链接）。
 - 生成办公文档用 xlsx_write / docx_write / pptx_build；写文件是越权操作，会先请用户确认。
 - 起草邮件/周报/文档用 draft（纯文本，用户审阅后自行使用）。
 - 一步只做一件清楚的事；工具失败会把错误回灌给你，据此调整。
@@ -38,6 +39,8 @@ class AssistantScenario:
             ReadDirTool(self.fs),
             SearchFilesTool(self.fs),
             SummarizeFilesTool(self.fs),
+            WebSearchTool(),
+            WebFetchTool(),
             DraftTool(),
             XlsxWriteTool(self.fs),
             DocxWriteTool(self.fs),
