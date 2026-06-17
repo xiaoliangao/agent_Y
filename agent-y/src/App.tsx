@@ -1,17 +1,18 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Plus, Settings as SettingsIcon, Code2, Briefcase, ArrowUp, X,
   AlertTriangle, MessageSquare, KeyRound, Clock,
   CloudSun, FolderPlus, CheckSquare, Square, FileCode2, Terminal,
+  Folder, FolderOpen, ChevronRight, FilePlus, RotateCw,
 } from 'lucide-react';
 import {
   createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile,
   listProviders, getSettings, listReviews,
   listTodos, addTodo, patchTodo, listFolders, addFolder, deleteFolder,
   getWeather, hasNativeFolderPick, pickFolderNative,
-  listWorkspaceFiles, readWorkspaceFile,
-  type Frame, type SessionSummary, type Connection, type Todo, type Folder,
+  listWorkspaceFiles, readWorkspaceFile, setWorkspace, clearWorkspace, newWorkspaceFile,
+  type Frame, type SessionSummary, type Connection, type Todo, type Folder as FolderT,
   type Weather, type WeatherDay, type WorkspaceFile,
 } from './api';
 import SettingsPanel from './Settings';
@@ -53,7 +54,7 @@ function DiffCard({ ch, onKeep, onRevert }: { ch: FileChange; onKeep: () => void
             const isHunk = line.startsWith('@@');
             const isMeta = line.startsWith('+++') || line.startsWith('---');
             const add = c === '+' && !isMeta, del = c === '-' && !isMeta;
-            const bg = add ? 'rgba(91,140,110,0.13)' : del ? 'rgba(191,79,61,0.11)' : 'transparent';
+            const bg = add ? 'var(--diff-add)' : del ? 'var(--diff-del)' : 'transparent';
             const col = isHunk ? 'var(--color-gold)' : add ? 'var(--color-ok)' : del ? 'var(--color-danger)' : 'var(--color-ink-2)';
             const sign = add ? '+' : del ? '−' : '';
             const text = (isMeta || isHunk) ? line : line.slice(1);
@@ -158,6 +159,63 @@ function CodeView({ content }: { content?: string }) {
   );
 }
 
+// 工作区文件树：扁平相对路径 → 嵌套可折叠树
+type TreeNode = { name: string; path: string; dir: boolean; children: TreeNode[] };
+function buildFileTree(files: WorkspaceFile[]): TreeNode[] {
+  const root: TreeNode = { name: '', path: '', dir: true, children: [] };
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let cur = root;
+    parts.forEach((part, i) => {
+      const isFile = i === parts.length - 1;
+      let child = cur.children.find((c) => c.name === part && c.dir === !isFile);
+      if (!child) { child = { name: part, path: parts.slice(0, i + 1).join('/'), dir: !isFile, children: [] }; cur.children.push(child); }
+      cur = child;
+    });
+  }
+  const sortRec = (n: TreeNode) => {
+    n.children.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1));
+    n.children.forEach(sortRec);
+  };
+  sortRec(root);
+  return root.children;
+}
+
+function FileTree({ files, activeTab, changedPaths, onOpen }: {
+  files: WorkspaceFile[]; activeTab: string | null; changedPaths: Set<string>; onOpen: (p: string) => void;
+}) {
+  const tree = useMemo(() => buildFileTree(files), [files]);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggle = (p: string) => setCollapsed((s) => { const n = new Set(s); if (n.has(p)) n.delete(p); else n.add(p); return n; });
+  const render = (n: TreeNode, depth: number): React.ReactNode => {
+    const pad = 10 + depth * 12;
+    if (n.dir) {
+      const open = !collapsed.has(n.path);
+      return (
+        <div key={n.path}>
+          <button onClick={() => toggle(n.path)} className="w-full flex items-center gap-1.5 py-1 text-left transition-colors hover:bg-[rgba(255,255,255,0.04)]" style={{ paddingLeft: pad, paddingRight: 10 }}>
+            <ChevronRight className="w-3 h-3 shrink-0 transition-transform" style={{ color: 'var(--color-ink-3)', transform: open ? 'rotate(90deg)' : 'none' }} />
+            {open ? <FolderOpen className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--color-gold)' }} /> : <Folder className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--color-ink-3)' }} />}
+            <span className="text-[12.5px] truncate" style={{ color: 'var(--color-ink-2)' }}>{n.name}</span>
+          </button>
+          {open && n.children.map((c) => render(c, depth + 1))}
+        </div>
+      );
+    }
+    const on = activeTab === n.path;
+    const changed = changedPaths.has(n.path);
+    return (
+      <button key={n.path} onClick={() => onOpen(n.path)} className="w-full flex items-center gap-1.5 py-1 text-left transition-colors hover:bg-[rgba(255,255,255,0.04)]"
+        style={{ paddingLeft: pad + 16, paddingRight: 10, background: on ? 'var(--color-elevated)' : 'transparent' }}>
+        <FileCode2 className="w-3.5 h-3.5 shrink-0" style={{ color: changed ? 'var(--color-gold)' : 'var(--color-ink-3)' }} />
+        <span className="font-mono text-[12px] truncate" style={{ color: on ? 'var(--color-ink)' : 'var(--color-ink-2)' }}>{n.name}</span>
+        {changed && <span className="ml-auto w-1.5 h-1.5 rounded-full shrink-0" style={{ background: 'var(--color-gold)' }} />}
+      </button>
+    );
+  };
+  return <>{tree.map((n) => render(n, 0))}</>;
+}
+
 export default function App() {
   const [scene, setScene] = useState<'coding' | 'assistant'>('assistant');
   const [threads, setThreads] = useState<SessionSummary[]>([]);
@@ -176,9 +234,11 @@ export default function App() {
   const [agentName, setAgentName] = useState('Agent Y');
   const [weather, setWeather] = useState<Weather | null>(null);
   const [todos, setTodos] = useState<Todo[]>([]);
-  const [folders, setFolders] = useState<Folder[]>([]);
+  const [folders, setFolders] = useState<FolderT[]>([]);
   const [newTodo, setNewTodo] = useState('');
   const [files, setFiles] = useState<WorkspaceFile[]>([]);     // 编码场景工作区文件树
+  const [wsName, setWsName] = useState('');                    // 工作区名（打开的文件夹名）
+  const [wsCustom, setWsCustom] = useState(false);             // 是否是「打开的文件夹」
   const [openTabs, setOpenTabs] = useState<string[]>([]);      // 编辑器打开的文件
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [fileCache, setFileCache] = useState<Record<string, string>>({});
@@ -197,7 +257,10 @@ export default function App() {
     listFolders().then(setFolders).catch(() => {});
     getWeather().then(setWeather).catch(() => {});
   };
-  const refreshFiles = (sid: string | null) => { if (sid) listWorkspaceFiles(sid).then(setFiles).catch(() => {}); else setFiles([]); };
+  const refreshFiles = (sid: string | null) => {
+    if (!sid) { setFiles([]); setWsName(''); setWsCustom(false); return; }
+    listWorkspaceFiles(sid).then((d) => { setFiles(d.files); setWsName(d.name); setWsCustom(d.is_custom); }).catch(() => {});
+  };
   useEffect(() => { refreshThreads(); refreshConfig(); refreshDaily(); }, []);
   useEffect(() => { if (scene === 'assistant') refreshDaily(); else refreshFiles(sessionId); }, [scene, sessionId]);
 
@@ -228,6 +291,35 @@ export default function App() {
     const rest = openTabs.filter((x) => x !== path);
     setOpenTabs(rest);
     if (activeTab === path) setActiveTab(rest[rest.length - 1] ?? null);
+  };
+  const ensureSession = async (): Promise<string> => {
+    if (sessionId) return sessionId;
+    const sid = await createSession('编码', 'coding');
+    setSessionId(sid);
+    return sid;
+  };
+  const openFolder = async () => {  // IDE「打开文件夹」
+    const path = hasNativeFolderPick() ? await pickFolderNative() : window.prompt('输入要打开的项目文件夹绝对路径：');
+    if (!path || !path.trim()) return;
+    const sid = await ensureSession();
+    await setWorkspace(sid, path.trim()).catch(() => {});
+    setOpenTabs([]); setActiveTab(null); setFileCache({});
+    refreshFiles(sid);
+  };
+  const createFile = async () => {  // IDE「新建文件」
+    const name = window.prompt('新文件路径（相对工作区，可含子目录，如 src/main.py）：');
+    if (!name || !name.trim()) return;
+    const sid = await ensureSession();
+    const r = await newWorkspaceFile(sid, name.trim(), '').catch(() => null);
+    refreshFiles(sid);
+    const p = r?.path;
+    if (p) { setFileCache((c) => ({ ...c, [p]: '' })); setOpenTabs((t) => (t.includes(p) ? t : [...t, p])); setActiveTab(p); }
+  };
+  const closeFolder = async () => {
+    if (!sessionId) return;
+    await clearWorkspace(sessionId).catch(() => {});
+    setOpenTabs([]); setActiveTab(null); setFileCache({});
+    refreshFiles(sessionId);
   };
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [messages, trace, running]);
 
@@ -352,7 +444,7 @@ export default function App() {
   );
 
   return (
-    <div className="flex h-screen w-full overflow-hidden" style={{ color: 'var(--color-ink)' }}>
+    <div className={`flex h-screen w-full overflow-hidden ${scene === 'coding' ? 'theme-ide' : ''}`} style={{ color: 'var(--color-ink)' }}>
       {/* SIDEBAR */}
       <aside className="w-[258px] shrink-0 hidden md:flex flex-col" style={{ background: 'var(--color-panel)', borderRight: '1px solid var(--color-line)' }}>
         <div className="h-16 flex items-center px-5 gap-3">
@@ -495,26 +587,31 @@ export default function App() {
               {/* 编码 IDE：(文件树 | 编辑器) 上 / 终端 下；右侧对话全高 */}
               <div className="flex-1 flex flex-col min-w-0">
                 <div className="flex flex-1 min-h-0">
-                  {/* 文件树 */}
-                  <aside className="w-[210px] shrink-0 hidden md:flex flex-col" style={{ background: 'var(--color-panel)', borderRight: '1px solid var(--color-line)' }}>
-                    <div className="h-9 flex items-center px-4 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
-                      <span className="label">工作区</span>
+                  {/* 文件树 / 资源管理器 */}
+                  <aside className="w-[232px] shrink-0 hidden md:flex flex-col" style={{ background: 'var(--color-panel)', borderRight: '1px solid var(--color-line)' }}>
+                    <div className="h-9 flex items-center gap-0.5 pl-4 pr-2 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
+                      <span className="label truncate flex-1" title={wsCustom ? wsName : '会话工作区'}>
+                        {wsCustom ? wsName : '工作区'}
+                      </span>
+                      <button onClick={openFolder} title="打开文件夹" className="btn btn-ghost p-1.5"><FolderOpen className="w-3.5 h-3.5" /></button>
+                      <button onClick={createFile} title="新建文件" className="btn btn-ghost p-1.5"><FilePlus className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => refreshFiles(sessionId)} title="刷新" className="btn btn-ghost p-1.5"><RotateCw className="w-3.5 h-3.5" /></button>
                     </div>
-                    <div className="flex-1 overflow-y-auto no-scrollbar py-2">
-                      {files.length === 0 && <div className="px-4 text-[12px] leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>还没有文件。<br />给我一个编码任务。</div>}
-                      {files.map((f) => {
-                        const changed = changes.some((c) => c.path === f.path);
-                        const on = activeTab === f.path;
-                        return (
-                          <button key={f.path} onClick={() => openFile(f.path)} className="w-full flex items-center gap-2 px-4 py-1.5 text-left transition-colors"
-                            style={on ? { background: 'var(--color-elevated)' } : {}}>
-                            <FileCode2 className="w-3.5 h-3.5 shrink-0" style={{ color: changed ? 'var(--color-gold)' : 'var(--color-ink-3)' }} />
-                            <span className="font-mono text-[12px] truncate" style={{ color: on ? 'var(--color-ink)' : 'var(--color-ink-2)' }}>{f.path}</span>
-                            {changed && <span className="ml-auto w-1.5 h-1.5 rounded-full shrink-0" style={{ background: 'var(--color-gold)' }} />}
-                          </button>
-                        );
-                      })}
+                    <div className="flex-1 overflow-y-auto no-scrollbar py-1.5">
+                      {files.length === 0 ? (
+                        <div className="px-4 mt-3 text-[12px] leading-[1.9]" style={{ color: 'var(--color-ink-3)' }}>
+                          空工作区。
+                          <button onClick={openFolder} className="mt-2 flex items-center gap-1.5" style={{ color: 'var(--color-gold)' }}><FolderOpen className="w-3.5 h-3.5" /> 打开文件夹</button>
+                          <button onClick={createFile} className="flex items-center gap-1.5" style={{ color: 'var(--color-gold)' }}><FilePlus className="w-3.5 h-3.5" /> 新建文件</button>
+                          <span className="block mt-1.5 opacity-80">或在右侧直接给我一个编码任务。</span>
+                        </div>
+                      ) : (
+                        <div key={sessionId || 'none'}><FileTree files={files} activeTab={activeTab} changedPaths={new Set(changes.map((c) => c.path))} onOpen={openFile} /></div>
+                      )}
                     </div>
+                    {wsCustom && (
+                      <button onClick={closeFolder} className="text-[11px] px-4 py-2 text-left shrink-0" style={{ color: 'var(--color-ink-3)', borderTop: '1px solid var(--color-line)' }}>← 关闭文件夹（回默认工作区）</button>
+                    )}
                   </aside>
 
                   {/* 编辑器：标签页 + 内容 */}
@@ -533,10 +630,17 @@ export default function App() {
                         );
                       })}
                     </div>
+                    {activeTab && (
+                      <div className="px-4 py-1 text-[11px] font-mono shrink-0 flex items-center gap-1.5" style={{ color: 'var(--color-ink-3)', borderBottom: '1px solid var(--color-line)', background: 'var(--color-panel)' }}>
+                        {changes.some((c) => c.path === activeTab) && <span style={{ color: 'var(--color-gold)' }}>● 未审阅改动</span>}
+                        <span className="truncate">{activeTab}</span>
+                      </div>
+                    )}
                     <div className="flex-1 min-h-0 overflow-hidden">
                       {!activeTab ? (
-                        <div className="h-full flex items-center justify-center text-center px-8 text-[13px] leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>
-                          左侧选择文件查看；agent 的改动会自动在这里高亮成 diff。
+                        <div className="h-full flex flex-col items-center justify-center text-center px-8 gap-3" style={{ color: 'var(--color-ink-3)' }}>
+                          <Code2 className="w-8 h-8" style={{ color: 'var(--color-line-2)' }} />
+                          <div className="text-[13px] leading-relaxed">左侧选择文件查看；<br />agent 的改动会自动在这里高亮成 diff。</div>
                         </div>
                       ) : (() => {
                         const ch = changes.find((c) => c.path === activeTab);

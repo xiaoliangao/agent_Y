@@ -261,6 +261,26 @@ async def test_workspace_files_list_and_read(tmp_path):
         assert (await client.get(f"/sessions/{sid}/file", params={"path": "nope.py"})).status_code == 404
 
 
+async def test_open_folder_and_new_file(tmp_path):
+    app = _app(tmp_path, MockProvider([script_text("ok")]))
+    proj = tmp_path / "myproj"
+    (proj / "src").mkdir(parents=True)
+    (proj / "src" / "main.py").write_text("print('hi')\n")
+    async with _client(app) as client:
+        sid = (await client.post("/sessions", json={"scenario": "coding"})).json()["session_id"]
+        r = (await client.post(f"/sessions/{sid}/workspace", json={"path": str(proj)})).json()
+        assert r["is_custom"] and r["name"] == "myproj"
+        d = (await client.get(f"/sessions/{sid}/files")).json()
+        assert d["is_custom"] and "src/main.py" in [f["path"] for f in d["files"]]
+        nf = await client.post(f"/sessions/{sid}/new-file", json={"path": "notes/todo.md", "content": "# hi"})
+        assert nf.status_code == 201 and nf.json()["path"] == "notes/todo.md"
+        assert (proj / "notes" / "todo.md").read_text() == "# hi"
+        assert (await client.post(f"/sessions/{sid}/new-file", json={"path": "notes/todo.md"})).status_code == 409
+        assert (await client.post(f"/sessions/{sid}/workspace", json={"path": str(tmp_path / "nope")})).status_code == 400
+        assert (await client.delete(f"/sessions/{sid}/workspace")).json()["ok"]
+        assert (await client.get(f"/sessions/{sid}/files")).json()["is_custom"] is False
+
+
 async def test_serves_frontend_when_present(tmp_path):
     fe = tmp_path / "fe"
     fe.mkdir()

@@ -118,6 +118,15 @@ class RevertIn(BaseModel):
     content: str
 
 
+class WorkspaceIn(BaseModel):
+    path: str  # 打开一个文件夹作为该会话的工作区（IDE「打开文件夹」）
+
+
+class NewFileIn(BaseModel):
+    path: str            # 相对工作区的新文件路径
+    content: str | None = None
+
+
 def _get_provider(app: FastAPI) -> Any:
     if app.state.provider is not None:
         return app.state.provider  # 测试注入
@@ -169,6 +178,25 @@ def _sandbox(app: FastAPI, ws: str) -> Any:
 
         return DockerSandbox()
     return LocalExecutor(ws)
+
+
+# IDE「打开文件夹」：会话可指定一个真实目录作工作区；否则用默认的 per-session workspace。
+_WS_SKIP = {".git", "__pycache__", "node_modules", "dist", "build", ".venv", "venv",
+            ".next", "target", ".idea", ".vscode", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
+
+
+def _session_ws(app: FastAPI, sid: str) -> str:
+    custom = (getattr(app.state, "workspaces", None) or {}).get(sid)
+    if custom and os.path.isdir(custom):
+        return os.path.realpath(custom)
+    ws = os.path.join(app.state.data_dir, "sessions", sid, "workspace")
+    os.makedirs(ws, exist_ok=True)
+    return os.path.realpath(ws)
+
+
+def _save_workspaces(app: FastAPI) -> None:
+    with open(os.path.join(app.state.data_dir, "workspaces.json"), "w", encoding="utf-8") as f:
+        json.dump(app.state.workspaces, f, ensure_ascii=False)
 
 
 async def _run_automation(app: FastAPI, prompt: str, scenario_name: str) -> str:
@@ -242,8 +270,7 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
         scenario: Any = AssistantScenario(app.state.fs)
     else:
         scenario = CodingScenario()
-    workspace = os.path.join(app.state.data_dir, "sessions", sid, "workspace")
-    os.makedirs(workspace, exist_ok=True)
+    workspace = _session_ws(app, sid)  # 默认 per-session，或用户「打开文件夹」指定的真实目录
     provider = _get_provider(app)
     model = _active_model(app, "orchestrator")  # 会话主 loop（F1.4）
     sub_model = _active_model(app, "subagent")  # 子 agent 可配更便宜的跑量模型
@@ -366,6 +393,12 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
         os.path.join(data_dir, "providers.db"), secrets=provider_secrets
     )
     app.state.settings = SettingsStore(os.path.join(data_dir, "settings.json"))  # 人设/默认模型/审批
+    app.state.workspaces = {}  # sid -> 打开的文件夹路径（IDE「打开文件夹」）；持久化到 workspaces.json
+    try:
+        with open(os.path.join(data_dir, "workspaces.json"), encoding="utf-8") as f:
+            app.state.workspaces = json.load(f)
+    except Exception:
+        pass
 
     @app.exception_handler(HTTPException)
     async def _http_exc(_req: Request, exc: HTTPException):  # 统一错误信封（design §4.0）
@@ -431,7 +464,7 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
 
     @app.post("/sessions/{sid}/revert")
     async def revert_file(sid: str, body: RevertIn, request: Request):  # diff 审阅「撤销」：写回原内容
-        ws = os.path.realpath(os.path.join(request.app.state.data_dir, "sessions", sid, "workspace"))
+        ws = _session_ws(request.app, sid)
         target = os.path.realpath(os.path.join(ws, body.path))
         if target != ws and not target.startswith(ws + os.sep):
             raise HTTPException(400, "bad_path")  # 防越界
@@ -441,12 +474,13 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
         return {"ok": True}
 
     @app.get("/sessions/{sid}/files")
-    async def list_workspace_files(sid: str, request: Request):  # 编码 IDE：会话工作区文件树（只读）
-        ws = os.path.realpath(os.path.join(request.app.state.data_dir, "sessions", sid, "workspace"))
+    async def list_workspace_files(sid: str, request: Request):  # 编码 IDE：工作区文件树（只读）
+        ws = _session_ws(request.app, sid)
+        custom = (request.app.state.workspaces or {}).get(sid)
         out: list[dict] = []
         if os.path.isdir(ws):
             for root, dirs, fns in os.walk(ws):
-                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ("__pycache__", "node_modules")]
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _WS_SKIP]
                 for fn in fns:
                     if fn.startswith("."):
                         continue
@@ -456,12 +490,16 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
                     except OSError:
                         continue
                     out.append({"path": os.path.relpath(full, ws), "size": size})
+                    if len(out) >= 3000:  # 大仓库兜底：别把整棵树都吐出来
+                        break
+                if len(out) >= 3000:
+                    break
         out.sort(key=lambda f: f["path"])
-        return {"files": out}
+        return {"root": ws, "name": os.path.basename(ws), "is_custom": bool(custom), "files": out}
 
     @app.get("/sessions/{sid}/file")
     async def read_workspace_file(sid: str, path: str, request: Request):  # 编码 IDE：读单个文件（只读、越界防护）
-        ws = os.path.realpath(os.path.join(request.app.state.data_dir, "sessions", sid, "workspace"))
+        ws = _session_ws(request.app, sid)
         target = os.path.realpath(os.path.join(ws, path))
         if target != ws and not target.startswith(ws + os.sep):
             raise HTTPException(400, "bad_path")
@@ -475,6 +513,37 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
         except (UnicodeDecodeError, OSError):
             return {"path": path, "content": "(二进制或无法读取的文件)", "truncated": True}
         return {"path": path, "content": content, "truncated": False}
+
+    @app.post("/sessions/{sid}/workspace")
+    async def set_workspace(sid: str, body: WorkspaceIn, request: Request):  # IDE「打开文件夹」
+        p = os.path.realpath(os.path.expanduser(body.path.strip()))
+        if not os.path.isdir(p):
+            raise HTTPException(400, "not_a_directory")
+        request.app.state.workspaces[sid] = p
+        _save_workspaces(request.app)
+        return {"root": p, "name": os.path.basename(p), "is_custom": True}
+
+    @app.delete("/sessions/{sid}/workspace")
+    async def clear_workspace(sid: str, request: Request):  # 关掉打开的文件夹，回到默认工作区
+        request.app.state.workspaces.pop(sid, None)
+        _save_workspaces(request.app)
+        return {"ok": True}
+
+    @app.post("/sessions/{sid}/new-file", status_code=201)
+    async def new_workspace_file(sid: str, body: NewFileIn, request: Request):  # IDE「新建文件」
+        ws = _session_ws(request.app, sid)
+        rel = body.path.strip().lstrip("/")
+        if not rel:
+            raise HTTPException(400, "empty_path")
+        target = os.path.realpath(os.path.join(ws, rel))
+        if target != ws and not target.startswith(ws + os.sep):
+            raise HTTPException(400, "bad_path")
+        if os.path.exists(target):
+            raise HTTPException(409, "already_exists")
+        os.makedirs(os.path.dirname(target) or ws, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(body.content or "")
+        return {"path": os.path.relpath(target, ws)}
 
     # ---------- 个人助手：文件夹授权 / 待办 / 提醒（M5）----------
     @app.get("/folders")

@@ -66,13 +66,19 @@ export const postApproval = (approvalId: string, decision: "allow" | "deny") =>
 export const interruptSession = (sid: string) => post(`/sessions/${sid}/interrupt`);
 export const revertFile = (sid: string, path: string, content: string) => post(`/sessions/${sid}/revert`, { path, content });
 
-// 编码 IDE：会话工作区文件树 + 读单文件（只读）
+// 编码 IDE：工作区文件树 / 读单文件 / 打开文件夹 / 新建文件
 export interface WorkspaceFile { path: string; size: number; }
+export interface WorkspaceInfo { root: string; name: string; is_custom: boolean; files: WorkspaceFile[]; }
 export const listWorkspaceFiles = (sid: string) =>
-  j<{ files: WorkspaceFile[] }>(`/sessions/${sid}/files`).then((d) => d.files ?? []).catch(() => []);
+  j<WorkspaceInfo>(`/sessions/${sid}/files`).catch(() => ({ root: '', name: '', is_custom: false, files: [] as WorkspaceFile[] }));
 export const readWorkspaceFile = (sid: string, path: string) =>
   j<{ path: string; content: string; truncated: boolean }>(`/sessions/${sid}/file?path=${encodeURIComponent(path)}`)
     .catch(() => ({ path, content: '(读取失败)', truncated: false }));
+export const setWorkspace = (sid: string, path: string) =>
+  post(`/sessions/${sid}/workspace`, { path }) as Promise<{ root: string; name: string; is_custom: boolean }>;
+export const clearWorkspace = (sid: string) => j(`/sessions/${sid}/workspace`, { method: 'DELETE' });
+export const newWorkspaceFile = (sid: string, path: string, content?: string) =>
+  post(`/sessions/${sid}/new-file`, { path, content }) as Promise<{ path: string }>;
 
 // ---------- BYOK / 模型 / 设置 ----------
 export const listProviders = () => j<{ connections: Connection[] }>("/providers").then((d) => d.connections ?? []).catch(() => []);

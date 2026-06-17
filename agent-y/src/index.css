@@ -19,6 +19,32 @@
   --color-gold-2: #cd7a5d;
   --color-danger: #bf4f3d;
   --color-ok: #5b8c6e;
+  --diff-add: rgba(91,140,110,0.13);
+  --diff-del: rgba(191,79,61,0.11);
+}
+
+/* 编码模式：暖调深色 IDE —— 同一品牌(陶土/奶油)，灯光调暗以专注。
+   只重写 CSS 变量，整窗所有面板自动转深色。 */
+.theme-ide {
+  --color-bg: #18140f;
+  --color-panel: #1f1a14;
+  --color-elevated: #2a231b;
+  --color-line: #322a20;
+  --color-line-2: #41372a;
+  --color-ink: #efe7d8;
+  --color-ink-2: #b6a890;
+  --color-ink-3: #7d7058;
+  --color-gold: #d98a52;
+  --color-gold-2: #e6995f;
+  --color-danger: #e07a5f;
+  --color-ok: #82ad84;
+  --diff-add: rgba(130,173,132,0.16);
+  --diff-del: rgba(224,122,95,0.16);
+  color: var(--color-ink);
+  background:
+    radial-gradient(900px 520px at 86% -10%, rgba(217,138,82,0.07), transparent 60%),
+    radial-gradient(640px 420px at -4% 108%, rgba(217,138,82,0.045), transparent 55%),
+    var(--color-bg);
 }
 
 * { border-color: var(--color-line); }
