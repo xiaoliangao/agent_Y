@@ -32,13 +32,25 @@ function greet(): string {
   return h < 5 ? '夜深了。' : h < 11 ? '早上好。' : h < 14 ? '中午好。' : h < 18 ? '下午好。' : '晚上好。';
 }
 
-// Agent「在场感」光珠：柔晕 + 高光立体，空闲缓呼吸、运行时脉冲（Marvis 式拟人化）
-function AgentOrb({ running, size = 64 }: { running: boolean; size?: number }) {
+// Agent「在场感」光圈：扁平细环 + 中心点（轨道感，呼应图标）；运行时转一道弧。小尺寸用状态点。
+function AgentOrb({ running, size = 48 }: { running: boolean; size?: number }) {
+  const gold = 'var(--color-gold)';
+  if (size < 22) {
+    return (
+      <span className="relative inline-flex shrink-0" style={{ width: size, height: size }}>
+        {running && <span className="absolute inset-0 rounded-full" style={{ border: `1.5px solid ${gold}`, animation: 'ring 1.5s ease-out infinite' }} />}
+        <span className="m-auto rounded-full" style={{ width: size * 0.46, height: size * 0.46, background: gold, animation: running ? 'blink 1.2s infinite' : 'none' }} />
+      </span>
+    );
+  }
+  const ring = (inset: string | number, op: number) =>
+    ({ position: 'absolute' as const, inset, borderRadius: 9999, border: `1.5px solid ${gold}`, opacity: op });
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
-      <div className="absolute rounded-full" style={{ inset: -size * 0.34, background: 'radial-gradient(circle, rgba(208,121,78,0.20), transparent 62%)' }} />
-      {running && <span className="absolute inset-0 rounded-full" style={{ background: 'var(--color-gold)', animation: 'ring 1.5s ease-out infinite' }} />}
-      <div className="orb absolute inset-0" style={{ animation: `breathe ${running ? 1.3 : 4.5}s ease-in-out infinite` }} />
+      <div style={{ ...ring(0, 0.38), animation: `breathe ${running ? 2.4 : 6}s ease-in-out infinite` }} />
+      <div style={ring('24%', 0.7)} />
+      <div className="absolute rounded-full" style={{ inset: '44%', background: gold }} />
+      {running && <div className="absolute rounded-full" style={{ inset: 0, border: '1.5px solid transparent', borderTopColor: gold, animation: 'spin 0.9s linear infinite' }} />}
     </div>
   );
 }
