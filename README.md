@@ -11,7 +11,7 @@
 |---|---|---|
 | ① 需求分析 | ✅ **定稿** | `docs/PRD.md` v1.0 + §8 原型图 |
 | ② 系统设计 | 🚧 **进行中** | `docs/design.md`（架构 / 接口契约 / 数据模型 / M1 拆解）|
-| ③ 编码开发 | ⬜ 待启动 | 源码 + 代码规范 |
+| ③ 编码开发 | 🚧 **M1 完成（离线验收）** | core 内核 + CLI + 27 测试通过；接真模型仅差 API key |
 | ④ 测试 | ⬜ | 测试用例 / 报告 |
 | ⑤ 部署上线 | ⬜ | 打包 `.app` / 部署文档 |
 | ⑥ 运维维护 | ⬜ | 监控 / 迭代 |
@@ -25,6 +25,18 @@
 | [`docs/research.md`](docs/research.md) | **调研**：memory / 自进化 / harness·loop·context engineering 业界做法 + OpenAI 侧复核 + 术语表，带引用 |
 | [`docs/code-study-cc.md`](docs/code-study-cc.md) | **源码借鉴**：Claude Code 6 子系统行级走读 + Agent Y 借鉴/忽略清单 |
 | [`docs/plan.md`](docs/plan.md) | 早期落地计划，**已被 PRD/design 取代**，留作历史参考 |
+
+## 快速开始（M1）
+
+```bash
+pip install -e ".[dev]"          # 安装
+pytest -q                        # 27 个测试应全过
+python scripts/demo_loop.py      # 离线看 agent loop 调工具→回灌→完成（无需 API/Docker）
+
+# 接真模型跑编码任务（修复一个故意写错的测试）：
+export ANTHROPIC_API_KEY=sk-...
+python -m cli.main run "修复 calculator.py 里失败的测试" --workspace examples/fix_failing_test --yes
+```
 
 ## 技术栈（详见 PRD / design）
 
