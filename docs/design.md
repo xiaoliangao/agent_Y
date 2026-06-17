@@ -155,44 +155,82 @@ class StreamEvent(BaseModel):
 
 ---
 
-## 4. 接口契约（并行开发的命脉）
+## 4. 接口契约（完整规范 · 冻结面）
 
-> 本节是两人开工前必须共同确认并冻结的部分。改契约 = 通知对方。
+> **冻结规则**：本节是两人编码的**唯一接口真相源**。任何改动 → PR 标题带 `[contract]` + @ 对方 + 合并前双方确认。**先冻结，再各写各的、用 mock 对接。**
+> **怎么读**：§4.0 通用约定；§4.1 前后端 HTTP/SSE（前端/同事侧关心）；§4.2–4.5 是 core 内部 Python 接口（后端侧关心）。
+
+### 4.0 通用约定
+- **传输**：后端绑 `127.0.0.1:<port>`，**单用户、本地无鉴权**（不监听外网）。请求/响应 `application/json; charset=utf-8`。
+- **时间**：一律 ISO-8601 UTC（`2026-06-17T08:30:00Z`）。
+- **ID 前缀**：`sess_`(会话) `msg_` `span_` `appr_`(审批) `task_` `run_`(eval) `conn_`(provider 连接)；`tool_use.id` 由模型给、原样透传。
+- **错误信封**（所有非 2xx）：`{ "error": { "code": "session_not_found", "message": "人类可读", "detail": {} } }`。常用 code：`bad_request`(400) / `not_found`(404) / `conflict`(409) / `provider_error`(502) / `internal`(500)。
+- **流式**：仅 `POST /sessions/{id}/messages` 用 SSE（`text/event-stream`），其余都是普通 JSON。
 
 ### 4.1 后端 ↔ 前端（FastAPI REST + SSE）
 
-**约定**：普通操作走 REST（JSON）；**agent 跑起来的实时输出走 SSE**（`text/event-stream`），因为要边跑边推 chat 与 trace。
+#### 4.1.1 REST 端点（逐个完整规范）
 
-| 方法 | 路径 | 说明 |
+**会话**
+- `POST /sessions` — 新建会话/线程
+  - 请求 `{ "title"?: string, "scenario"?: "coding"|"assistant" }`
+  - 响应 `201` `{ "session_id", "title", "scenario", "created_at" }`
+- `GET /sessions` — 列会话（updated_at 倒序）→ `{ "sessions": [ {"id","title","scenario","status","updated_at","message_count"} ] }`；`status` ∈ `idle|running|error`
+- `GET /sessions/{id}` — 详情 + 历史 → `{ "session": {..}, "messages": [Message,..] }`（Message 见 §3）；`404 session_not_found`
+- `DELETE /sessions/{id}` — 删会话连带 transcript → `200 {ok:true}`
+
+**对话（核心，SSE）**
+- `POST /sessions/{id}/messages` — 发用户消息，**返回 SSE 流**
+  - 请求 `{ "text": string, "attachments"?: [ {type,...} ] }`
+  - 成功 `200` + `Content-Type: text/event-stream`，随后是 §4.1.2 事件序列，以 `done` 结束
+  - 流前失败 `409 conflict`（已有 running）/ `404` / `400`；流中出错 → 发 `error` 事件再 `done{reason:"error"}`
+
+**审批 / 中断**
+- `POST /approvals/{approval_id}` — `{ "decision":"allow"|"deny", "scope"?:"once"|"session" }`（`session`=本会话内同类自动放行）→ `200 {ok:true}`；`409 approval_expired`
+- `POST /sessions/{id}/interrupt` — 中断当前运行（abort）→ `200 {ok:true}`
+
+**Trace**
+- `GET /sessions/{id}/trace` — `{ "spans": [Span,..] }`（Span 见 §7，含 parent_id 可重建树）
+
+**Provider / 模型（BYOK）**
+- `GET /providers` — 列连接（**绝不返回 key**）→ `{ "connections": [ {"id","provider","base_url"?,"model_default"?,"created_at"} ] }`
+- `POST /providers` — `{ "provider":"anthropic"|"openai_compat", "api_key":string, "base_url"?, "model_default"? }`；**key 立即进 OS keychain，DB 仅存 keychain_ref、响应不回显 key** → `201 { "id":"conn_..","provider","base_url"?,"model_default"? }`
+- `DELETE /providers/{id}` — 连带删 keychain 项 → `200 {ok:true}`
+- `GET /models` — `{ "models": [ {"id","provider","context_window","max_output","supports_tools","supports_thinking","price_in"?,"price_out"?} ] }`
+
+**Eval / 后台任务**
+- `POST /eval/runs` — `{ "taskset":string, "model":string }` → `202 { "run_id" }`（异步）
+- `GET /eval/runs/{id}` — `{ "run_id","taskset","model","status","pass_rate"?,"results":[{task_id,passed,detail}],"curve"? }`
+- `GET /tasks/{id}` — `{ "id","type","status","description","output_file"?,"created_at","ended_at"? }`；status ∈ `pending|running|completed|failed|killed`
+
+#### 4.1.2 SSE 事件目录（完整字段）
+每帧 = `data: <一行 JSON>\n\n`；前端按 `type` 分发：
+
+| type | 字段 | 时机 / 渲染 |
 |---|---|---|
-| `POST` | `/sessions` | 新建会话/线程，body `{title?, scenario?}` → `{session_id}` |
-| `GET` | `/sessions` | 列会话（按项目/任务分线程） |
-| `GET` | `/sessions/{id}` | 会话详情 + 消息历史 |
-| `POST` | `/sessions/{id}/messages` | **发用户消息，返回 SSE 流**（见下事件） |
-| `POST` | `/approvals/{approval_id}` | 审批回复 `{decision: "allow"\|"deny", scope?: "once"\|"session"}` |
-| `GET` | `/sessions/{id}/trace` | 取该会话完整 span 树（回看） |
-| `POST` | `/sessions/{id}/interrupt` | 中断当前运行（abort） |
-| `GET`/`POST`/`DELETE` | `/providers` | BYOK 连接管理（key 进 keychain，仅存引用） |
-| `GET` | `/models` | 可用模型 + 能力元数据 |
-| `POST` | `/eval/runs` | 跑任务集；`GET /eval/runs/{id}` 取结果/曲线 |
-| `GET` | `/tasks/{id}` | 后台任务（自动化/异步子 agent）状态 |
+| `text_delta` | `text` | 助手文本增量 → 左栏 chat |
+| `thinking_delta` | `text` | 思考增量 → 可折叠区 |
+| `tool_use` | `id, name, input(object)` | 模型决定调工具（input 已 parse 完整）→ trace 新节点 |
+| `tool_progress` | `id, chunk` | 工具执行中流式进度（如 bash 输出）|
+| `tool_result` | `id, is_error(bool), preview` | 工具结束（preview 截断；全文在 trace/transcript）|
+| `approval_request` | `approval_id, tool, summary, risk("low"/"medium"/"high")` | **暂停**等 `POST /approvals`；UI 弹确认 |
+| `span` | `span(Span 见 §7)` | trace 节点增量 → 右栏 |
+| `usage` | `input_tokens, output_tokens` | 本轮用量（可累加成本）|
+| `done` | `reason("completed"/"max_turns"/"aborted"/"error")` | **流终结** |
+| `error` | `message, code?` | 出错（其后必跟 `done{reason:"error"}`）|
 
-**SSE 事件信封**（`data:` 后跟一行 JSON）：
+> 前端只认这 10 种事件，后端实现随意演进。`approval_request` = **服务端发起、暂停等回复**的审批门（借鉴 Codex App Server，`research.md §C-24`）。
 
-```jsonc
-{ "type": "text_delta",      "text": "..." }            // 助手文本增量
-{ "type": "thinking_delta",  "text": "..." }            // 思考增量（可折叠显示）
-{ "type": "tool_use",        "id": "...", "name": "bash", "input": {...} }
-{ "type": "tool_progress",   "id": "...", "chunk": "..." }   // 工具执行中的进度
-{ "type": "tool_result",     "id": "...", "is_error": false, "preview": "..." }
-{ "type": "approval_request","approval_id": "...", "tool": "write_file", "summary": "改 3 个文件", "risk": "medium" }
-{ "type": "span",            "span": {...} }             // trace 节点（右栏渲染）
-{ "type": "usage",           "input_tokens": 1234, "output_tokens": 56 }
-{ "type": "done",            "reason": "completed" }     // 终结：completed/max_turns/aborted/error
-{ "type": "error",           "message": "..." }
+#### 4.1.3 一次对话时序（示例）
+```text
+前端 → POST /sessions/sess_1/messages {text:"修复失败的测试"}
+后端 ← 200 text/event-stream:
+   span(run开始) → thinking_delta* → text_delta*
+   → tool_use(bash,{cmd:"pytest"}) → tool_progress* → tool_result(...)
+   → tool_use(edit_file,...) → approval_request(appr_9, write_file, "改1个文件", medium)   [暂停]
+前端 → POST /approvals/appr_9 {decision:"allow"}
+后端 ← (续) tool_result(...) → text_delta*("已修复…") → usage → done(completed)
 ```
-
-> **为什么这样设计**：前端只认这一组事件类型，后端怎么实现都行。`approval_request` 是**服务端发起、暂停等前端回复**的审批门（借鉴 Codex App Server，见 `research.md §C-24`）：收到它前端弹确认框，用户点 allow/deny → `POST /approvals/{id}` → 后端继续。
 
 ### 4.2 core ↔ Provider（`core/providers/base.py`）
 
@@ -219,7 +257,13 @@ class LLMProvider(Protocol):
 
 实现：
 - **`AnthropicProvider`**（M1）：用 `anthropic` SDK 的 `messages.stream`；按 `code-study-cc.md §1` 解析 SSE。注意用 `thinking:{type:"adaptive"}` + `output_config:{effort}`，**不要传 `temperature`/`top_p`/`budget_tokens`**（见 `claude-api` 约定）。
-- **`OpenAICompatProvider`**（M3）：用 `openai` SDK 指 `base_url`，覆盖 GPT/DeepSeek/Ollama/LM Studio。把 OpenAI 的 `tool_calls`/`delta` 流**转成统一 `StreamEvent`**；tool_result 以 `role:"tool"` 回发；无 server 端上下文管理原语（见 §6）。
+- **`OpenAICompatProvider`**（M3）：用 `openai` SDK 指 `base_url`，覆盖 GPT/DeepSeek/Ollama/LM Studio。把 OpenAI 的 `tool_calls`/`delta` 流**转成统一 `StreamEvent`**；tool_result 以 `role:"tool"` 回发；无 server 端上下文管理原语（见 §5）。
+
+**`stream` 的契约保证**（loop 依赖，adapter 必须遵守）：
+1. 事件顺序 `(text_delta | thinking_delta | tool_use)* → message_done`。
+2. **`tool_use` 只在该块完整、`input` 已 `json.loads` 后吐出**（分片 JSON 在 adapter 内累积，`code-study-cc.md §1`）。
+3. `message_done` 必带 `usage` 与 `stop_reason`（后者仅记录/调试，**不作停止主信号**）。
+4. 收到 abort → 停止产出、清理连接、抛 `Aborted`；API 错误（限流/超时/鉴权）→ 抛 `ProviderError(code, retryable)`，**不静默吞**，由 loop 决定重试/上报。
 
 > **契约要点**：loop 只依赖 `LLMProvider` 这个 Protocol，**永远不 import 具体 provider**。加一家 = 写一个 adapter，不动 loop。
 
@@ -263,20 +307,43 @@ class Tool(Protocol, Generic[TIn]):
     def render_for_ui(self, data) -> dict: ...                                  # 给 trace
 ```
 
-**执行编排**（`core/tools/registry.py`）：
-1. 收到一批 `tool_use` → `model_validate` 逐个校验（失败 → `<tool_use_error>` 回灌，不抛）。
-2. **并发分桶**：连续的 `is_concurrency_safe=True` 工具用 `asyncio.gather` 并行（`Semaphore(8)` 限流）；写工具串行。来源：`code-study-cc.md §1/§3`。
-3. 每个工具 `validate_input` → `check_permissions`（`ask` → 发 `approval_request` 暂停）→ `call`。
-4. `to_model_result` 拼回历史，`render_for_ui` 进 trace。
+**`ToolContext`**（registry 注入给每个工具，是 core 内部 ctx，与 4.1 的 HTTP 无关）：
+```python
+@dataclass
+class ToolContext:
+    cwd: str
+    sandbox: SandboxExecutor
+    abort: AbortSignal
+    read_file_state: dict                # "先读后写"校验：edit 前必须先 read 过该文件
+    approval_mode: ApprovalMode
+    request_approval: Callable[[PermissionResult], Awaitable[bool]]  # behavior=ask 时调(触发 SSE)
+    tracer: Tracer
+```
 
-**M1 内置工具**：`bash`、`read_file`、`write_file`、`edit_file`（PRD F2.3）。`bash` 默认 `is_read_only=False`；`read_file`/glob/grep 类 `is_read_only=True`。
+**生命周期**（`registry` 对每个 tool_use 严格按序；任何失败都"回灌错误、不抛异常中断 loop"）：
+1. `input_model.model_validate(raw)` 失败 → 回 `tool_result{is_error:true, content:"<tool_use_error>InputValidationError: .."}`。
+2. `validate_input` 失败 → 同样回 `<tool_use_error>`。
+3. `check_permissions`：`deny`→回 error；`ask`→`ctx.request_approval`（触发 SSE `approval_request` 暂停），拒绝→回 error。
+4. `call(inp, ctx, on_progress)` → `ToolResult(data=..)`；`on_progress(chunk)` 推 `tool_progress`。
+5. `to_model_result` 拼回历史，`render_for_ui` 进 trace。
+
+**并发**：连续 `is_concurrency_safe=True` 的工具 `asyncio.gather` 并行（`Semaphore(8)`），写工具串行；并行批内 context 修改先收集、跑完统一应用（`code-study-cc.md §1`）。
+
+**M1 内置工具**：`bash`(非只读) · `read_file`/`grep`/`glob`(只读) · `write_file`/`edit_file`(写；`edit_file` 要求先 read 过该文件，PRD F2.3)。
 
 ### 4.4 core ↔ Sandbox（`core/sandbox/base.py`）
 
 ```python
+@dataclass
+class ExecResult:
+    exit_code: int
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+
 class SandboxExecutor(Protocol):
     async def exec(self, cmd: list[str], cwd: str, timeout: int,
-                   network: bool = False) -> "ExecResult": ...   # stdout/stderr/exit_code
+                   network: bool = False) -> ExecResult: ...      # stdout/stderr/exit_code
     async def write_files(self, files: dict[str, bytes]) -> None: ...
     async def read_file(self, path: str) -> bytes: ...
 ```
@@ -289,6 +356,13 @@ class SandboxExecutor(Protocol):
 按 `code-study-cc.md §6` 校准后的文件方案（**v1 无向量库、无 α/β/γ**）：
 
 ```python
+class Memory(BaseModel):
+    name: str                            # kebab-case slug = 文件名
+    description: str                     # 一句话，召回时给小模型判断相关性
+    type: Literal["user", "feedback", "project", "reference"]
+    body: str
+    mtime: float | None = None           # 文件修改时间 → "saved N days ago" 文本
+
 class MemoryStore(Protocol):
     async def recall(self, query: str, k: int = 5) -> list["Memory"]: ...
         # 扫各文件 frontmatter → 小模型挑 ≤k 条 → 读出，附 "saved N days ago"

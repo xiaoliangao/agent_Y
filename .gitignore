@@ -1,5 +1,6 @@
-# 参考素材：Claude Code 内部源码，仅本地参考，不纳入版本控制
+# 参考素材：仅本地学习参考，不纳入版本控制
 cc-resourcecode/
+references/
 
 # 依赖与构建产物
 node_modules/
