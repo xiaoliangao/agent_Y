@@ -74,11 +74,13 @@ textarea, input { font-family: inherit; }
 .rise { animation: rise .4s cubic-bezier(.2,.7,.3,1) both; }
 @keyframes blink { 0%,100% { opacity: .25; } 50% { opacity: 1; } }
 
-/* Agent「在场感」陶土光球：空闲缓呼吸、运行脉冲 */
+/* Agent「在场感」光珠：高光 + 柔晕 + 立体，空闲缓呼吸、运行脉冲 */
 .orb {
   border-radius: 9999px;
-  background: radial-gradient(circle at 38% 32%, #ffe7da 0%, var(--color-gold) 46%, #8f4733 100%);
-  box-shadow: 0 0 28px rgba(192,106,77,0.38), inset 0 -3px 9px rgba(110,50,30,0.4), inset 0 3px 7px rgba(255,235,225,0.5);
+  background:
+    radial-gradient(circle at 30% 24%, rgba(255,252,248,0.95) 0%, rgba(255,252,248,0) 26%),
+    radial-gradient(circle at 38% 32%, #f1b791 0%, #d6794f 48%, #93472a 100%);
+  box-shadow: 0 8px 20px rgba(150,70,40,0.26), inset 0 -4px 9px rgba(95,40,18,0.38);
 }
 @keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
 @keyframes ring { 0% { transform: scale(.85); opacity: .5; } 100% { transform: scale(1.9); opacity: 0; } }

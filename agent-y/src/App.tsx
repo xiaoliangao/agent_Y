@@ -32,10 +32,11 @@ function greet(): string {
   return h < 5 ? '夜深了。' : h < 11 ? '早上好。' : h < 14 ? '中午好。' : h < 18 ? '下午好。' : '晚上好。';
 }
 
-// Agent「在场感」光球：空闲缓呼吸，运行时脉冲（Marvis 式拟人化）
+// Agent「在场感」光珠：柔晕 + 高光立体，空闲缓呼吸、运行时脉冲（Marvis 式拟人化）
 function AgentOrb({ running, size = 64 }: { running: boolean; size?: number }) {
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <div className="absolute rounded-full" style={{ inset: -size * 0.34, background: 'radial-gradient(circle, rgba(208,121,78,0.20), transparent 62%)' }} />
       {running && <span className="absolute inset-0 rounded-full" style={{ background: 'var(--color-gold)', animation: 'ring 1.5s ease-out infinite' }} />}
       <div className="orb absolute inset-0" style={{ animation: `breathe ${running ? 1.3 : 4.5}s ease-in-out infinite` }} />
     </div>
@@ -164,7 +165,7 @@ export default function App() {
               <div className="max-w-2xl mx-auto w-full">
                 {messages.length === 0 && (
                   <div className="mt-20 flex flex-col items-center text-center rise">
-                    <AgentOrb running={running} size={72} />
+                    <AgentOrb running={running} size={54} />
                     <div className="font-serif text-[40px] leading-tight mt-7 mb-2">{greet()}</div>
                     <p className="text-[14px] max-w-sm" style={{ color: 'var(--color-ink-3)' }}>
                       {conns.length === 0
