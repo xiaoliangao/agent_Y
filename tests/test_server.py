@@ -173,6 +173,28 @@ async def test_assistant_scenario_selected(tmp_path):
     assert "read_dir" in names and "xlsx_write" in names
 
 
+async def test_providers_models_settings_endpoints(tmp_path):
+    from tests.test_providers import FakeSecrets
+
+    app = create_app(
+        provider=MockProvider([]), db_path=str(tmp_path / "db"),
+        data_dir=str(tmp_path / "d"), provider_secrets=FakeSecrets(),
+    )
+    async with _client(app) as client:
+        r = await client.post(
+            "/providers", json={"provider": "openai", "api_key": "sk-x", "model_default": "deepseek-chat"}
+        )
+        assert r.status_code == 201 and "sk-x" not in r.text  # 响应不回显 key
+        cid = r.json()["id"]
+        conns = (await client.get("/providers")).json()["connections"]
+        assert conns[0]["active"] is True and "sk-x" not in str(conns)
+        assert (await client.get("/models")).json()["models"]
+        assert (await client.get("/settings")).json()["persona_suggestion"]  # 默认人设建议
+        await client.put("/settings", json={"persona": "私人助理", "default_model": "deepseek-chat"})
+        assert (await client.get("/settings")).json()["settings"]["persona"] == "私人助理"
+        assert (await client.delete(f"/providers/{cid}")).json()["ok"] is True
+
+
 async def test_serves_frontend_when_present(tmp_path):
     fe = tmp_path / "fe"
     fe.mkdir()

@@ -24,12 +24,18 @@ from core.engine import SessionEngine
 from core.harness.approval import ApprovalMode
 from core.harness.fs_access import FolderAccess
 from core.loop import LoopEvent
+from core.providers.catalog import MODELS
+from core.providers.store import ProviderStore
 from core.sandbox.local import LocalExecutor
 from core.scenarios.assistant.scenario import AssistantScenario
 from core.scenarios.coding.scenario import CodingScenario
 from core.scheduler.store import SchedulerStore
+from core.settings import DEFAULT_PERSONA, SettingsStore
 from core.store import Store
 from core.types import Message, TextBlock
+
+_APPROVAL = {"read_only": ApprovalMode.READ_ONLY, "ask": ApprovalMode.ASK,
+             "auto": ApprovalMode.AUTO, "full": ApprovalMode.FULL}
 
 
 class SessionIn(BaseModel):
@@ -69,9 +75,34 @@ class ReminderIn(BaseModel):
     repeat: str | None = None
 
 
+class ProviderIn(BaseModel):
+    provider: str  # anthropic | openai
+    api_key: str
+    base_url: str | None = None
+    model_default: str | None = None
+
+
+class SettingsIn(BaseModel):
+    agent_name: str | None = None
+    persona: str | None = None
+    default_model: str | None = None
+    approval_mode: str | None = None
+
+
 def _get_provider(app: FastAPI) -> Any:
     if app.state.provider is not None:
-        return app.state.provider
+        return app.state.provider  # 测试注入
+    conn = app.state.providers.active()  # 用户在设置页配的激活连接（key 在 keychain）
+    if conn:
+        key = app.state.providers.get_key(conn["id"])
+        if conn["provider"] == "openai":
+            from core.providers.openai_compat import OpenAICompatProvider
+
+            return OpenAICompatProvider(api_key=key, base_url=conn["base_url"])
+        from core.providers.anthropic import AnthropicProvider
+
+        return AnthropicProvider(api_key=key)
+    # 兜底：环境变量（向后兼容 / 无连接时）
     prov = os.environ.get("AGENTY_PROVIDER", "anthropic")
     if prov == "openai":
         from core.providers.openai_compat import OpenAICompatProvider
@@ -81,6 +112,17 @@ def _get_provider(app: FastAPI) -> Any:
     from core.providers.anthropic import AnthropicProvider
 
     return AnthropicProvider()
+
+
+def _active_model(app: FastAPI) -> str:
+    """模型优先级：设置页 default_model → 激活连接 model_default → app.state.model。"""
+    s = app.state.settings.get()
+    if s.get("default_model"):
+        return s["default_model"]
+    conn = app.state.providers.active()
+    if conn and conn.get("model_default"):
+        return conn["model_default"]
+    return app.state.model
 
 
 def _frames(ev: LoopEvent) -> list[dict]:
@@ -111,24 +153,28 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
     workspace = os.path.join(app.state.data_dir, "sessions", sid, "workspace")
     os.makedirs(workspace, exist_ok=True)
     provider = _get_provider(app)
+    model = _active_model(app)
+    settings = app.state.settings.get()
+    system = app.state.settings.effective_system(scenario.system_prompt())  # 人设 + 场景提示词
+    approval = _APPROVAL.get(settings.get("approval_mode", ""), app.state.approval_mode)
     # 上下文压缩（始终开，便宜）+ 长期记忆（按 app.state.memory_enabled，跨会话共享）
     from core.harness.context import ContextManager, context_window_for
 
     context_manager = ContextManager(
-        provider=provider, model=app.state.model, context_window=context_window_for(app.state.model)
+        provider=provider, model=model, context_window=context_window_for(model)
     )
     memory_store = None
     if app.state.memory_enabled:
         from core.memory.store import FileMemoryStore
 
         memory_store = FileMemoryStore(
-            os.path.join(app.state.data_dir, "memory"), provider=provider, model=app.state.model
+            os.path.join(app.state.data_dir, "memory"), provider=provider, model=model
         )
     from core.obs.tracer import build_tracer
 
     eng = SessionEngine(
-        provider=provider, tools=scenario.tools(), system=scenario.system_prompt(),
-        sandbox=LocalExecutor(workspace), model=app.state.model, approval_mode=app.state.approval_mode,
+        provider=provider, tools=scenario.tools(), system=system,
+        sandbox=LocalExecutor(workspace), model=model, approval_mode=approval,
         tracer=build_tracer(console=False), context_manager=context_manager,
         memory_store=memory_store, reflect=memory_store is not None,
     )
@@ -194,7 +240,8 @@ def _default_frontend() -> str:
 
 def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: str | None = None,
                model: str | None = None, approval_mode: ApprovalMode = ApprovalMode.ASK,
-               memory: bool | None = None, frontend_dir: str | None = None) -> FastAPI:
+               memory: bool | None = None, frontend_dir: str | None = None,
+               provider_secrets: Any = None) -> FastAPI:
     app = FastAPI(title="Agent Y", version="0.1.0")
     # 本地单用户：放开 CORS，便于前端 dev server(另一端口) 直连。生产同源(pywebview)时无所谓。
     app.add_middleware(
@@ -214,6 +261,10 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
     app.state.runs = {}        # sid -> {task, engine}
     app.state.fs = FolderAccess(os.path.join(data_dir, "folders.json"))  # 助手文件夹授权
     app.state.scheduler = SchedulerStore(os.path.join(data_dir, "scheduler.db"))  # 待办/提醒
+    app.state.providers = ProviderStore(  # BYOK 连接（key 进 keychain）
+        os.path.join(data_dir, "providers.db"), secrets=provider_secrets
+    )
+    app.state.settings = SettingsStore(os.path.join(data_dir, "settings.json"))  # 人设/默认模型/审批
 
     @app.exception_handler(HTTPException)
     async def _http_exc(_req: Request, exc: HTTPException):  # 统一错误信封（design §4.0）
@@ -317,6 +368,41 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
         if not request.app.state.scheduler.delete_reminder(rid):
             raise HTTPException(404, "reminder_not_found")
         return {"ok": True}
+
+    # ---------- BYOK 连接 / 模型目录 / 设置（F1.2 / F1.3 / F7.2·F7.4）----------
+    @app.get("/providers")
+    async def list_providers(request: Request):  # 绝不返回 key
+        return {"connections": request.app.state.providers.list()}
+
+    @app.post("/providers", status_code=201)
+    async def add_provider(body: ProviderIn, request: Request):
+        return request.app.state.providers.add(
+            body.provider, body.api_key, base_url=body.base_url, model_default=body.model_default
+        )  # key 立即进 keychain，响应不含 key
+
+    @app.post("/providers/{cid}/activate")
+    async def activate_provider(cid: str, request: Request):
+        if not request.app.state.providers.set_active(cid):
+            raise HTTPException(404, "connection_not_found")
+        return {"ok": True}
+
+    @app.delete("/providers/{cid}")
+    async def del_provider(cid: str, request: Request):
+        if not request.app.state.providers.delete(cid):
+            raise HTTPException(404, "connection_not_found")
+        return {"ok": True}
+
+    @app.get("/models")
+    async def list_models():
+        return {"models": MODELS}
+
+    @app.get("/settings")
+    async def get_settings(request: Request):
+        return {"settings": request.app.state.settings.get(), "persona_suggestion": DEFAULT_PERSONA}
+
+    @app.put("/settings")
+    async def put_settings(body: SettingsIn, request: Request):
+        return {"settings": request.app.state.settings.update(**body.model_dump(exclude_none=True))}
 
     # 末尾挂载前端静态产物（若存在）：打包后桌面窗口直接 http://127.0.0.1:port/ 同源访问。
     # 必须在所有 API 路由之后挂载，"/" 兜底不抢 API。
