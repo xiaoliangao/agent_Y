@@ -5,7 +5,7 @@ import {
   AlertTriangle, Activity, MessageSquare, KeyRound, Clock,
 } from 'lucide-react';
 import {
-  createSession, listSessions, getSessionMessages, streamMessage, postApproval,
+  createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile,
   listProviders, getSettings, listReviews, type Frame, type SessionSummary, type Connection,
 } from './api';
 import SettingsPanel from './Settings';
@@ -14,6 +14,30 @@ import AutomationsPanel from './Automations';
 type Msg = { id: string; role: 'user' | 'assistant'; content: string };
 type Step = { id: string; label: string; target?: string; status: 'running' | 'done' | 'error' };
 type Approval = Extract<Frame, { type: 'approval_request' }>;
+type FileChange = Extract<Frame, { type: 'file_change' }>;
+
+// 彩色 unified diff 卡片：保留(关掉) / 撤销(写回原内容)
+function DiffCard({ ch, onKeep, onRevert }: { ch: FileChange; onKeep: () => void; onRevert: () => void }) {
+  return (
+    <div className="rise rounded-xl overflow-hidden mb-3" style={{ border: '1px solid var(--color-line)' }}>
+      <div className="px-3.5 py-2 flex items-center justify-between" style={{ background: 'var(--color-elevated)' }}>
+        <span className="font-mono text-[12.5px]">{ch.path}</span>
+        <div className="flex gap-1.5">
+          <button onClick={onRevert} className="btn btn-ghost text-[11px] px-2 py-1">撤销</button>
+          <button onClick={onKeep} className="btn btn-gold text-[11px] px-2.5 py-1">保留</button>
+        </div>
+      </div>
+      <pre className="text-[11.5px] font-mono leading-[1.55] overflow-x-auto p-3 no-scrollbar" style={{ background: 'var(--color-panel)' }}>
+        {ch.diff.split('\n').map((line, i) => {
+          const c = line[0];
+          const bg = c === '+' ? 'rgba(91,140,110,0.14)' : c === '-' ? 'rgba(191,79,61,0.12)' : 'transparent';
+          const col = c === '+' ? 'var(--color-ok)' : c === '-' ? 'var(--color-danger)' : line.startsWith('@@') ? 'var(--color-gold)' : 'var(--color-ink-2)';
+          return <div key={i} style={{ background: bg, color: col, padding: '0 6px' }}>{line || ' '}</div>;
+        })}
+      </pre>
+    </div>
+  );
+}
 
 const uid = () => Math.random().toString(36).slice(2);
 const target = (input: Record<string, any>) =>
@@ -62,6 +86,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [trace, setTrace] = useState<Step[]>([]);
+  const [changes, setChanges] = useState<FileChange[]>([]);
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const [approval, setApproval] = useState<Approval | null>(null);
@@ -96,6 +121,7 @@ export default function App() {
     } else if (fr.type === 'tool_result') {
       setTrace((p) => p.map((s) => (s.id === fr.id ? { ...s, status: fr.is_error ? 'error' : 'done' } : s)));
     } else if (fr.type === 'approval_request') setApproval(fr);
+    else if (fr.type === 'file_change') setChanges((p) => [...p.filter((c) => c.path !== fr.path), fr]);
     else if (fr.type === 'done') streamId.current = null;
     else if (fr.type === 'error') setError(fr.message);
   };
@@ -103,7 +129,7 @@ export default function App() {
   const run = async () => {
     const text = input.trim();
     if (running || !text) return;
-    setInput(''); setError(null); setRunning(true);
+    setInput(''); setError(null); setRunning(true); setChanges([]);
     setMessages((p) => [...p, { id: uid(), role: 'user', content: text }]);
     streamId.current = null;
     try {
@@ -116,8 +142,10 @@ export default function App() {
   };
 
   const decide = async (d: 'allow' | 'deny') => { const a = approval; setApproval(null); if (a) await postApproval(a.approval_id, d); };
-  const newThread = () => { setSessionId(null); setMessages([]); setTrace([]); setError(null); };
-  const selectThread = async (id: string) => { setSessionId(id); setTrace([]); setError(null); setMessages(toChat(await getSessionMessages(id))); };
+  const newThread = () => { setSessionId(null); setMessages([]); setTrace([]); setChanges([]); setError(null); };
+  const selectThread = async (id: string) => { setSessionId(id); setTrace([]); setChanges([]); setError(null); setMessages(toChat(await getSessionMessages(id))); };
+  const keepChange = (path: string) => setChanges((p) => p.filter((c) => c.path !== path));
+  const revertChange = async (ch: FileChange) => { if (sessionId) await revertFile(sessionId, ch.path, ch.old); keepChange(ch.path); };
 
   return (
     <div className="flex h-screen w-full overflow-hidden" style={{ color: 'var(--color-ink)' }}>
@@ -213,6 +241,12 @@ export default function App() {
                   </div>
                 )}
                 {error && <div className="text-[13px] rounded-xl px-4 py-2.5 mb-6" style={{ color: 'var(--color-danger)', background: 'rgba(224,121,106,0.1)', border: '1px solid rgba(224,121,106,0.25)' }}>{error}</div>}
+                {changes.length > 0 && (
+                  <div className="mt-1 mb-8">
+                    <div className="label mb-2.5">本次改动 · {changes.length} 个文件</div>
+                    {changes.map((ch) => <DiffCard key={ch.path} ch={ch} onKeep={() => keepChange(ch.path)} onRevert={() => revertChange(ch)} />)}
+                  </div>
+                )}
               </div>
             </div>
 

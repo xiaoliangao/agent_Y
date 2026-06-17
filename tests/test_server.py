@@ -53,6 +53,26 @@ async def test_session_message_sse(tmp_path):
         assert len(detail["messages"]) >= 3
 
 
+async def test_file_change_frame_and_revert(tmp_path):
+    provider = MockProvider([
+        script_tool("写", "write_file", {"path": "hello.py", "content": "print(1)\n"}, "t1"),
+        script_text("done"),
+    ])
+    async with _client(_app(tmp_path, provider, ApprovalMode.AUTO)) as client:
+        sid = (await client.post("/sessions", json={"scenario": "coding"})).json()["session_id"]
+        async with client.stream("POST", f"/sessions/{sid}/messages", json={"text": "写 hello.py"}) as resp:
+            frames = await _drain(resp)
+        fc = [f for f in frames if f["type"] == "file_change"]
+        assert len(fc) == 1 and fc[0]["path"] == "hello.py" and "+print(1)" in fc[0]["diff"]
+        # 撤销：写回原内容（空）
+        assert (await client.post(f"/sessions/{sid}/revert", json={"path": "hello.py", "content": ""})).json()["ok"]
+        ws = tmp_path / "data" / "sessions" / sid / "workspace"
+        assert (ws / "hello.py").read_text() == ""
+        # 越界拒绝
+        bad = await client.post(f"/sessions/{sid}/revert", json={"path": "../escape.txt", "content": "x"})
+        assert bad.status_code == 400
+
+
 async def test_session_persists_across_restart(tmp_path):
     async with _client(_app(tmp_path, MockProvider([script_text("hi")]))) as c1:
         sid = (await c1.post("/sessions", json={"title": "persist"})).json()["session_id"]

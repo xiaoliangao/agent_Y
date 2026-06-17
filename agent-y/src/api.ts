@@ -10,6 +10,7 @@ export type Frame =
   | { type: "tool_result"; id: string; is_error: boolean; preview: string }
   | { type: "approval_request"; approval_id: string; tool: string; summary?: string; risk: string }
   | { type: "usage"; input_tokens: number; output_tokens: number }
+  | { type: "file_change"; path: string; diff: string; old: string }
   | { type: "done"; reason: string }
   | { type: "error"; message: string; code?: string };
 
@@ -53,6 +54,7 @@ export async function getSessionMessages(sid: string): Promise<{ role: string; c
 export const postApproval = (approvalId: string, decision: "allow" | "deny") =>
   post(`/approvals/${approvalId}`, { decision });
 export const interruptSession = (sid: string) => post(`/sessions/${sid}/interrupt`);
+export const revertFile = (sid: string, path: string, content: string) => post(`/sessions/${sid}/revert`, { path, content });
 
 // ---------- BYOK / 模型 / 设置 ----------
 export const listProviders = () => j<{ connections: Connection[] }>("/providers").then((d) => d.connections ?? []).catch(() => []);

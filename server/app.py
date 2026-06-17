@@ -27,6 +27,7 @@ from core.loop import LoopEvent
 from core.providers.catalog import MODELS
 from core.providers.store import ProviderStore
 from core.sandbox.local import LocalExecutor
+from core.sandbox.recording import RecordingSandbox
 from core.scenarios.assistant.scenario import AssistantScenario
 from core.scenarios.coding.scenario import CodingScenario
 from core.scheduler.automations import check_and_run
@@ -108,6 +109,11 @@ class AutomationPatch(BaseModel):
 
 class DecisionIn(BaseModel):
     decision: str  # accept | discard
+
+
+class RevertIn(BaseModel):
+    path: str
+    content: str
 
 
 def _get_provider(app: FastAPI) -> Any:
@@ -204,6 +210,22 @@ def _frames(ev: LoopEvent) -> list[dict]:
     return []
 
 
+def _file_change_frames(sandbox: Any) -> list[dict]:
+    """RecordingSandbox 的改动 → file_change 帧（path + unified diff + old，供前端审阅/撤销）。"""
+    import difflib
+
+    out: list[dict] = []
+    for path, ch in getattr(sandbox, "changes", {}).items():
+        if ch["old"] == ch["new"]:
+            continue
+        diff = "\n".join(difflib.unified_diff(
+            ch["old"].splitlines(), ch["new"].splitlines(),
+            fromfile=path, tofile=path, lineterm="", n=3,
+        ))
+        out.append({"type": "file_change", "path": path, "diff": diff, "old": ch["old"]})
+    return out
+
+
 def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
     sess = app.state.store.get_session(sid)
     if sess and sess.get("scenario") == "assistant":
@@ -238,7 +260,8 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
     tools = base_tools + [SpawnAgentTool(provider=provider, model=model, tools=base_tools, system=system)]
     eng = SessionEngine(
         provider=provider, tools=tools, system=system,
-        sandbox=_sandbox(app, workspace), model=model, approval_mode=approval,
+        sandbox=RecordingSandbox(_sandbox(app, workspace)),  # 记录文件改动供 diff 审阅
+        model=model, approval_mode=approval,
         tracer=build_tracer(console=False), context_manager=context_manager,
         memory_store=memory_store, reflect=memory_store is not None,
     )
@@ -268,6 +291,9 @@ async def _event_stream(app: FastAPI, sid: str, engine: SessionEngine, text: str
             async for ev in engine.submit(text):
                 if ev.message is not None:
                     st.store.add_message(sid, ev.message.model_dump())
+                if ev.kind == "done":  # 收尾前先推文件改动 diff
+                    for fr in _file_change_frames(engine.sandbox):
+                        await queue.put(fr)
                 for fr in _frames(ev):
                     await queue.put(fr)
         except asyncio.CancelledError:
@@ -390,6 +416,17 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
         run = request.app.state.runs.get(sid)
         if run:
             run["engine"].interrupt()
+        return {"ok": True}
+
+    @app.post("/sessions/{sid}/revert")
+    async def revert_file(sid: str, body: RevertIn, request: Request):  # diff 审阅「撤销」：写回原内容
+        ws = os.path.realpath(os.path.join(request.app.state.data_dir, "sessions", sid, "workspace"))
+        target = os.path.realpath(os.path.join(ws, body.path))
+        if target != ws and not target.startswith(ws + os.sep):
+            raise HTTPException(400, "bad_path")  # 防越界
+        os.makedirs(os.path.dirname(target) or ws, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(body.content)
         return {"ok": True}
 
     # ---------- 个人助手：文件夹授权 / 待办 / 提醒（M5）----------
