@@ -54,3 +54,10 @@ class ImprovementRecord:
     @property
     def delta(self) -> float:
         return self.candidate_pass - self.baseline_pass
+
+
+@dataclass
+class EvolveResult:
+    curve: list[float]              # 每轮后的 pass@1（提升曲线，单调不降）
+    final_policy: Policy            # 累积了所有"被保留经验"的策略
+    records: list[ImprovementRecord]

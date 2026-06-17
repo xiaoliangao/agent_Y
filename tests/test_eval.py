@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import json
+import re
 
 from core.eval.harness import run_taskset
-from core.eval.improve import improve
+from core.eval.improve import evolve, improve
 from core.eval.types import Candidate, Policy, Task
 from core.scenarios.coding.scenario import CodingScenario
 from core.types import StreamEvent, ToolUseBlock, Usage
@@ -95,3 +96,112 @@ async def test_improve_rolls_back_when_no_gain(tmp_path):
     )
     assert rec.candidate_pass == 0.0 and not rec.kept
     assert policy is base  # 回滚到基线
+
+
+# ---------- 多轮自进化：提升曲线 ----------
+class PerTaskLessonProvider:
+    """task i 的 bug 是 BUGi；系统提示含 BUGi 才用 sed 改成 OK，否则放弃。"""
+
+    name = "fake"
+
+    async def stream(self, *, system, messages, tools, model, max_tokens, extra=None):
+        text = " ".join(b.text for m in messages for b in m.content if getattr(b, "type", "") == "text")
+        match = re.search(r"BUG\d", text)
+        bug = match.group(0) if match else None
+        has = bug is not None and bug in system  # 仅当对应经验进了系统提示才修
+        last = messages[-1]
+        last_tr = last.role == "user" and any(getattr(b, "type", "") == "tool_result" for b in last.content)
+        if not has:
+            yield StreamEvent(type="text_delta", text="不会修")
+            yield StreamEvent(type="message_done", usage=Usage(), stop_reason="end_turn")
+            return
+        if not last_tr:
+            yield StreamEvent(type="tool_use", tool_use=ToolUseBlock(
+                id="b1", name="bash", input={"cmd": f"sed -i 's/{bug}/OK/' mod.py"}))
+            yield StreamEvent(type="message_done", usage=Usage(), stop_reason="tool_use")
+        else:
+            yield StreamEvent(type="text_delta", text="ok")
+            yield StreamEvent(type="message_done", usage=Usage(), stop_reason="end_turn")
+
+    def count_tokens(self, messages):
+        return None
+
+
+def _make_bug_task(tmp_path, i: int) -> Task:
+    d = tmp_path / f"t{i}"
+    d.mkdir()
+    (d / "meta.json").write_text(json.dumps({"prompt": f"修复 mod.py：把 BUG{i} 改成 OK", "test_cmd": "python3 -m pytest -q"}))
+    (d / "mod.py").write_text(f'def f():\n    return "BUG{i}"\n')
+    (d / "test_mod.py").write_text('from mod import f\n\n\ndef test_f():\n    assert f() == "OK"\n')
+    return Task(id=f"t{i}", prompt=f"修复 mod.py：把 BUG{i} 改成 OK", test_cmd="python3 -m pytest -q", workspace=str(d))
+
+
+async def test_evolve_produces_rising_curve(tmp_path):
+    tasks = [_make_bug_task(tmp_path, i) for i in range(3)]
+    tools = CodingScenario().tools()
+    bug_of = {f"t{i}": f"BUG{i}" for i in range(3)}
+
+    async def gen(failures, bp):  # 给第一个失败任务对应的经验
+        bug = bug_of[failures[0].task_id]
+        return Candidate(Policy(bp.system_prompt, [*bp.lessons, bug]), f"learn {bug}")
+
+    res = await evolve(tasks, provider=PerTaskLessonProvider(), model="fake",
+                       base_policy=Policy("你是编码助手。"), tools=tools, rounds=3, generate_candidate=gen)
+    assert res.curve[0] == 0.0
+    assert res.curve[-1] == 1.0
+    assert res.curve == sorted(res.curve)  # 单调不降
+    assert sum(1 for r in res.records if r.kept) == 3
+
+
+# ---------- 隐藏测试：agent 看不到评分用例 ----------
+class _SedProvider:
+    name = "fake"
+
+    def __init__(self, cmd: str):
+        self.cmd = cmd
+
+    async def stream(self, *, system, messages, tools, model, max_tokens, extra=None):
+        last = messages[-1]
+        last_tr = last.role == "user" and any(getattr(b, "type", "") == "tool_result" for b in last.content)
+        if not last_tr:
+            yield StreamEvent(type="tool_use", tool_use=ToolUseBlock(id="b1", name="bash", input={"cmd": self.cmd}))
+            yield StreamEvent(type="message_done", usage=Usage(), stop_reason="tool_use")
+        else:
+            yield StreamEvent(type="text_delta", text="done")
+            yield StreamEvent(type="message_done", usage=Usage(), stop_reason="end_turn")
+
+    def count_tokens(self, messages):
+        return None
+
+
+class _NoopProvider:
+    name = "fake"
+
+    async def stream(self, *, system, messages, tools, model, max_tokens, extra=None):
+        yield StreamEvent(type="text_delta", text="什么都不做")
+        yield StreamEvent(type="message_done", usage=Usage(), stop_reason="end_turn")
+
+    def count_tokens(self, messages):
+        return None
+
+
+def _make_hidden_task(tmp_path, name: str) -> Task:
+    d = tmp_path / name
+    d.mkdir()
+    (d / "meta.json").write_text(json.dumps({"prompt": "让 f() 返回 2", "test_cmd": "python3 -m pytest -q"}))
+    (d / "mod.py").write_text("def f():\n    return 1\n")
+    hd = d / "_hidden"
+    hd.mkdir()
+    (hd / "test_mod.py").write_text("from mod import f\n\n\ndef test_f():\n    assert f() == 2\n")
+    return Task(id=name, prompt="让 f() 返回 2", test_cmd="python3 -m pytest -q", workspace=str(d))
+
+
+async def test_hidden_tests_are_scored(tmp_path):
+    tools = CodingScenario().tools()
+    ok = await run_taskset([_make_hidden_task(tmp_path, "fix")],
+                           provider=_SedProvider("sed -i 's/return 1/return 2/' mod.py"),
+                           model="fake", system="助手", tools=tools)
+    assert ok.pass_rate == 1.0  # 修对 → 隐藏测试通过
+    bad = await run_taskset([_make_hidden_task(tmp_path, "noop")],
+                            provider=_NoopProvider(), model="fake", system="助手", tools=tools)
+    assert bad.pass_rate == 0.0  # 没改 → 隐藏测试失败（证明评分用的是隐藏测试）

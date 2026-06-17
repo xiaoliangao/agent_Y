@@ -22,7 +22,7 @@ import tempfile
 
 from core.engine import SessionEngine
 from core.eval.harness import run_taskset
-from core.eval.improve import improve
+from core.eval.improve import evolve
 from core.eval.taskset import load_taskset
 from core.eval.types import Policy
 from core.harness.approval import ApprovalMode
@@ -156,11 +156,17 @@ async def _improve(args: argparse.Namespace) -> int:
         print("自进化需要 ≥2 个任务（拆 train/val）", file=sys.stderr)
         return 2
     sc = CodingScenario()
-    print(f"自进化一轮 @ {args.model} …（跑基线 + 据失败生成经验 + 验证集重跑）")
-    rec, policy = await improve(tasks, provider=provider, model=args.model, base_policy=Policy(sc.system_prompt()), tools=sc.tools())
-    print(f"\n基线 pass@1: {rec.baseline_pass * 100:.0f}%  →  候选: {rec.candidate_pass * 100:.0f}%  (Δ {rec.delta * 100:+.0f}pt)")
-    print(f"改动: {rec.change_desc}")
-    print(f"结论: {'✅ 保留（有提升）' if rec.kept else '↩️  回滚（无提升）'}")
+    print(f"自进化 {args.rounds} 轮 @ {args.model} …（每轮：跑分→据失败学经验→重跑→只升才保留）")
+    res = await evolve(tasks, provider=provider, model=args.model,
+                       base_policy=Policy(sc.system_prompt()), tools=sc.tools(), rounds=args.rounds)
+    print("\npass@1 曲线: " + " → ".join(f"{p * 100:.0f}%" for p in res.curve))
+    for i, r in enumerate(res.records, 1):
+        flag = "✅保留" if r.kept else "↩️回滚"
+        print(f"  轮{i}: {r.baseline_pass * 100:.0f}% → {r.candidate_pass * 100:.0f}%  [{flag}]  {r.change_desc[:60]}")
+    if res.final_policy.lessons:
+        print("\n习得经验:")
+        for lesson in res.final_policy.lessons:
+            print(f"  - {lesson[:90]}")
     return 0
 
 
@@ -179,8 +185,9 @@ def main(argv: list[str] | None = None) -> int:
     ep.add_argument("--taskset", required=True, help="任务集目录，如 evals/coding-v1")
     _add_provider_args(ep)
 
-    ip = sub.add_parser("improve", help="自进化一轮（据失败改进，仅当提升才保留）")
+    ip = sub.add_parser("improve", help="自进化（据失败改进，仅当提升才保留，出 pass@1 曲线）")
     ip.add_argument("--taskset", required=True, help="任务集目录")
+    ip.add_argument("--rounds", type=int, default=2, help="自进化轮数（默认 2）")
     _add_provider_args(ip)
 
     args = p.parse_args(argv)

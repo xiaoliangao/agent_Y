@@ -20,9 +20,10 @@ async def run_task(
     task: Task, *, provider: Any, model: str, system: str, tools: list, max_turns: int = 20,
 ) -> TaskResult:
     ws = tempfile.mkdtemp(prefix="agenty-eval-")
+    hidden_dir = os.path.join(task.workspace, "_hidden")
     try:
         for fn in os.listdir(task.workspace):
-            if fn == "meta.json":
+            if fn in ("meta.json", "_hidden"):  # meta 与隐藏测试不给 agent 看
                 continue
             src = os.path.join(task.workspace, fn)
             if os.path.isfile(src):
@@ -34,6 +35,12 @@ async def run_task(
         )
         async for _ in engine.submit(task.prompt):  # 跑到 done
             pass
+        # agent 跑完才注入隐藏评分测试（SWE-bench 式：agent 看不到评分用例）
+        if os.path.isdir(hidden_dir):
+            for fn in os.listdir(hidden_dir):
+                src = os.path.join(hidden_dir, fn)
+                if os.path.isfile(src):
+                    shutil.copy(src, os.path.join(ws, fn))
         res = await sandbox.exec(["bash", "-lc", task.test_cmd], cwd=".", timeout=120)
         detail = (res.stdout + res.stderr)[-400:]
         return TaskResult(task.id, passed=res.exit_code == 0, detail=detail)

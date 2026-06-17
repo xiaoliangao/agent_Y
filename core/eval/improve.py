@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable
 
 from core.eval.harness import run_taskset
-from core.eval.types import Candidate, ImprovementRecord, Policy, Task, TaskResult
+from core.eval.types import Candidate, EvolveResult, ImprovementRecord, Policy, Task, TaskResult
 from core.types import Message, TextBlock
 
 # 候选生成器签名：(failures, base_policy) -> Candidate（async）
@@ -66,3 +66,32 @@ async def improve(
     kept = cand_run.pass_rate > base_run.pass_rate  # 只升不降才保留，否则回滚
     record = ImprovementRecord(base_run.pass_rate, cand_run.pass_rate, kept, candidate.change_desc)
     return record, (candidate.policy if kept else base_policy)
+
+
+async def evolve(
+    tasks: list[Task], *, provider: Any, model: str, base_policy: Policy, tools: list,
+    rounds: int = 3, generate_candidate: CandidateGen | None = None, max_turns: int = 20,
+) -> EvolveResult:
+    """多轮自进化（爬山）：每轮据失败学一条经验、只升才累积，产出 pass@1 提升曲线。
+
+    注：这里在整个任务集上爬山（in-sample）以画曲线；严格的留出验证见单轮 `improve`。
+    """
+    gen: CandidateGen = generate_candidate or (
+        lambda failures, bp: llm_reflect_candidate(failures, bp, provider=provider, model=model)
+    )
+    policy = base_policy
+    run = await run_taskset(tasks, provider=provider, model=model, system=policy.render(), tools=tools, max_turns=max_turns)
+    curve = [run.pass_rate]
+    records: list[ImprovementRecord] = []
+    for _ in range(rounds):
+        failures = [r for r in run.results if not r.passed]
+        if not failures:
+            break  # 已全过，无需再进化
+        candidate = await gen(failures, policy)
+        cand_run = await run_taskset(tasks, provider=provider, model=model, system=candidate.policy.render(), tools=tools, max_turns=max_turns)
+        kept = cand_run.pass_rate > run.pass_rate
+        records.append(ImprovementRecord(run.pass_rate, cand_run.pass_rate, kept, candidate.change_desc))
+        if kept:
+            policy, run = candidate.policy, cand_run
+        curve.append(run.pass_rate)
+    return EvolveResult(curve=curve, final_policy=policy, records=records)
