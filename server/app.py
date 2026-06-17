@@ -29,6 +29,7 @@ from core.providers.store import ProviderStore
 from core.sandbox.local import LocalExecutor
 from core.scenarios.assistant.scenario import AssistantScenario
 from core.scenarios.coding.scenario import CodingScenario
+from core.scheduler.automations import check_and_run
 from core.scheduler.store import SchedulerStore
 from core.settings import DEFAULT_PERSONA, SettingsStore
 from core.store import Store
@@ -89,6 +90,25 @@ class SettingsIn(BaseModel):
     approval_mode: str | None = None
 
 
+class AutomationIn(BaseModel):
+    name: str
+    schedule: str  # daily@HH:MM | Nm | Nh
+    prompt: str
+    scenario: str | None = None
+
+
+class AutomationPatch(BaseModel):
+    name: str | None = None
+    schedule: str | None = None
+    prompt: str | None = None
+    scenario: str | None = None
+    enabled: bool | None = None
+
+
+class DecisionIn(BaseModel):
+    decision: str  # accept | discard
+
+
 def _get_provider(app: FastAPI) -> Any:
     if app.state.provider is not None:
         return app.state.provider  # 测试注入
@@ -123,6 +143,36 @@ def _active_model(app: FastAPI) -> str:
     if conn and conn.get("model_default"):
         return conn["model_default"]
     return app.state.model
+
+
+async def _run_automation(app: FastAPI, prompt: str, scenario_name: str) -> str:
+    """自动化跑一次 agent（无会话、自动审批），收集助手文本作为产出。"""
+    from core.obs.tracer import build_tracer
+
+    scenario: Any = AssistantScenario(app.state.fs) if scenario_name == "assistant" else CodingScenario()
+    ws = os.path.join(app.state.data_dir, "automations_ws")
+    os.makedirs(ws, exist_ok=True)
+    eng = SessionEngine(
+        provider=_get_provider(app), tools=scenario.tools(),
+        system=app.state.settings.effective_system(scenario.system_prompt()),
+        sandbox=LocalExecutor(ws), model=_active_model(app),
+        approval_mode=ApprovalMode.AUTO, tracer=build_tracer(console=False),
+    )
+    parts: list[str] = []
+    async for ev in eng.submit(prompt):
+        if ev.kind == "text_delta" and ev.text:
+            parts.append(ev.text)
+    return "".join(parts).strip() or "(无输出)"
+
+
+async def _scheduler_loop(app: FastAPI) -> None:
+    interval = getattr(app.state, "scheduler_interval", 60)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await check_and_run(app.state.scheduler, lambda p, s: _run_automation(app, p, s))
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _frames(ev: LoopEvent) -> list[dict]:
@@ -241,7 +291,7 @@ def _default_frontend() -> str:
 def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: str | None = None,
                model: str | None = None, approval_mode: ApprovalMode = ApprovalMode.ASK,
                memory: bool | None = None, frontend_dir: str | None = None,
-               provider_secrets: Any = None) -> FastAPI:
+               provider_secrets: Any = None, run_scheduler: bool = False) -> FastAPI:
     app = FastAPI(title="Agent Y", version="0.1.0")
     # 本地单用户：放开 CORS，便于前端 dev server(另一端口) 直连。生产同源(pywebview)时无所谓。
     app.add_middleware(
@@ -269,6 +319,17 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
     @app.exception_handler(HTTPException)
     async def _http_exc(_req: Request, exc: HTTPException):  # 统一错误信封（design §4.0）
         return JSONResponse(status_code=exc.status_code, content={"error": {"code": exc.detail, "message": exc.detail}})
+
+    if run_scheduler:  # 后台定时调度（桌面/真服开；测试默认关，避免无限循环）
+        @app.on_event("startup")
+        async def _start_scheduler():
+            app.state._sched_task = asyncio.create_task(_scheduler_loop(app))
+
+        @app.on_event("shutdown")
+        async def _stop_scheduler():
+            task = getattr(app.state, "_sched_task", None)
+            if task:
+                task.cancel()
 
     @app.get("/health")
     async def health():
@@ -438,6 +499,50 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
     async def put_settings(body: SettingsIn, request: Request):
         return {"settings": request.app.state.settings.update(**body.model_dump(exclude_none=True))}
 
+    # ---------- 定时自动化 + review 队列（F6.6）----------
+    @app.get("/automations")
+    async def list_autos(request: Request):
+        return {"automations": request.app.state.scheduler.list_automations()}
+
+    @app.post("/automations", status_code=201)
+    async def add_auto(body: AutomationIn, request: Request):
+        return request.app.state.scheduler.add_automation(
+            body.name, body.schedule, body.prompt, scenario=body.scenario or "assistant"
+        )
+
+    @app.patch("/automations/{aid}")
+    async def patch_auto(aid: str, body: AutomationPatch, request: Request):
+        a = request.app.state.scheduler.update_automation(aid, **body.model_dump(exclude_none=True))
+        if a is None:
+            raise HTTPException(404, "automation_not_found")
+        return a
+
+    @app.delete("/automations/{aid}")
+    async def del_auto(aid: str, request: Request):
+        if not request.app.state.scheduler.delete_automation(aid):
+            raise HTTPException(404, "automation_not_found")
+        return {"ok": True}
+
+    @app.post("/automations/{aid}/run")
+    async def run_auto(aid: str, request: Request):  # 手动触发一次（不等调度）
+        a = request.app.state.scheduler.get_automation(aid)
+        if not a:
+            raise HTTPException(404, "automation_not_found")
+        out = await _run_automation(request.app, a["prompt"], a["scenario"])
+        request.app.state.scheduler.mark_automation_run(a["id"])
+        return request.app.state.scheduler.add_review(a["id"], a["name"], out)
+
+    @app.get("/review-queue")
+    async def list_rq(request: Request, status: str | None = None):
+        return {"reviews": request.app.state.scheduler.list_reviews(status)}
+
+    @app.post("/review-queue/{rid}")
+    async def decide_rq(rid: str, body: DecisionIn, request: Request):
+        r = request.app.state.scheduler.decide_review(rid, body.decision)
+        if r is None:
+            raise HTTPException(404, "review_not_found")
+        return r
+
     # 末尾挂载前端静态产物（若存在）：打包后桌面窗口直接 http://127.0.0.1:port/ 同源访问。
     # 必须在所有 API 路由之后挂载，"/" 兜底不抢 API。
     frontend = frontend_dir or os.environ.get("AGENTY_FRONTEND") or _default_frontend()
@@ -453,5 +558,5 @@ def _env_approval() -> ApprovalMode:
     return ApprovalMode.AUTO if os.environ.get("AGENTY_APPROVAL", "ask") == "auto" else ApprovalMode.ASK
 
 
-app = create_app(approval_mode=_env_approval())  # 供 `uvicorn server.app:app` 使用
+app = create_app(approval_mode=_env_approval(), run_scheduler=True)  # 供 `uvicorn server.app:app` 使用
 

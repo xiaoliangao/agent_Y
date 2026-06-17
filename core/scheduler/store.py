@@ -35,6 +35,13 @@ class SchedulerStore:
                 CREATE TABLE IF NOT EXISTS reminders(
                   id TEXT PRIMARY KEY, todo_id TEXT, text TEXT, fire_at TEXT,
                   repeat TEXT, fired INTEGER DEFAULT 0, created_at TEXT);
+                CREATE TABLE IF NOT EXISTS automations(
+                  id TEXT PRIMARY KEY, name TEXT, schedule TEXT, prompt TEXT,
+                  scenario TEXT DEFAULT 'assistant', enabled INTEGER DEFAULT 1,
+                  last_run TEXT, created_at TEXT);
+                CREATE TABLE IF NOT EXISTS review_queue(
+                  id TEXT PRIMARY KEY, automation_id TEXT, title TEXT, output TEXT,
+                  status TEXT DEFAULT 'pending', created_at TEXT);
                 """
             )
 
@@ -126,6 +133,92 @@ class SchedulerStore:
                 c.execute("UPDATE reminders SET fire_at=?, fired=0 WHERE id=?", (next_fire_at, rid))
             else:
                 c.execute("UPDATE reminders SET fired=1 WHERE id=?", (rid,))
+
+
+    # ---------- automations ----------
+    def add_automation(
+        self, name: str, schedule: str, prompt: str, *, scenario: str = "assistant"
+    ) -> dict:
+        aid = "auto_" + uuid.uuid4().hex[:10]
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO automations(id,name,schedule,prompt,scenario,enabled,last_run,created_at)"
+                " VALUES(?,?,?,?,?,1,NULL,?)",
+                (aid, name, schedule, prompt, scenario, now_iso()),
+            )
+        return self.get_automation(aid)  # type: ignore[return-value]
+
+    def get_automation(self, aid: str) -> dict | None:
+        with self._conn() as c:
+            r = c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone()
+            return _automation(r) if r else None
+
+    def list_automations(self) -> list[dict]:
+        with self._conn() as c:
+            return [_automation(r) for r in c.execute("SELECT * FROM automations ORDER BY created_at").fetchall()]
+
+    def update_automation(self, aid: str, **fields) -> dict | None:
+        cols = {"name", "schedule", "prompt", "scenario", "enabled"}
+        sets, vals = [], []
+        for k, v in fields.items():
+            if k in cols and v is not None:
+                sets.append(f"{k}=?")
+                vals.append(int(v) if k == "enabled" else v)
+        if sets:
+            with self._conn() as c:
+                c.execute(f"UPDATE automations SET {','.join(sets)} WHERE id=?", (*vals, aid))
+        return self.get_automation(aid)
+
+    def delete_automation(self, aid: str) -> bool:
+        with self._conn() as c:
+            return c.execute("DELETE FROM automations WHERE id=?", (aid,)).rowcount > 0
+
+    def mark_automation_run(self, aid: str, when: str | None = None) -> None:
+        with self._conn() as c:
+            c.execute("UPDATE automations SET last_run=? WHERE id=?", (when or now_iso(), aid))
+
+    # ---------- review_queue ----------
+    def add_review(self, automation_id: str, title: str, output: str) -> dict:
+        rid = "rev_" + uuid.uuid4().hex[:10]
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO review_queue(id,automation_id,title,output,status,created_at)"
+                " VALUES(?,?,?,?,'pending',?)",
+                (rid, automation_id, title, output, now_iso()),
+            )
+        return self.get_review(rid)  # type: ignore[return-value]
+
+    def get_review(self, rid: str) -> dict | None:
+        with self._conn() as c:
+            r = c.execute("SELECT * FROM review_queue WHERE id=?", (rid,)).fetchone()
+            return _review(r) if r else None
+
+    def list_reviews(self, status: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM review_queue"
+        args: tuple = ()
+        if status:
+            sql += " WHERE status=?"
+            args = (status,)
+        sql += " ORDER BY created_at DESC"
+        with self._conn() as c:
+            return [_review(r) for r in c.execute(sql, args).fetchall()]
+
+    def decide_review(self, rid: str, decision: str) -> dict | None:
+        status = "accepted" if decision == "accept" else "discarded"
+        with self._conn() as c:
+            c.execute("UPDATE review_queue SET status=? WHERE id=?", (status, rid))
+        return self.get_review(rid)
+
+
+def _automation(r: sqlite3.Row) -> dict:
+    return {"id": r["id"], "name": r["name"], "schedule": r["schedule"], "prompt": r["prompt"],
+            "scenario": r["scenario"], "enabled": bool(r["enabled"]), "last_run": r["last_run"],
+            "created_at": r["created_at"]}
+
+
+def _review(r: sqlite3.Row) -> dict:
+    return {"id": r["id"], "automation_id": r["automation_id"], "title": r["title"],
+            "output": r["output"], "status": r["status"], "created_at": r["created_at"]}
 
 
 def _todo(r: sqlite3.Row) -> dict:

@@ -162,6 +162,25 @@ async def test_todos_and_reminders_endpoints(tmp_path):
         assert (await client.delete(f"/reminders/{rem['id']}")).json()["ok"] is True
 
 
+async def test_automations_and_review_endpoints(tmp_path):
+    provider = MockProvider([script_text("自动化产出内容")])
+    async with _client(_app(tmp_path, provider, ApprovalMode.AUTO)) as client:
+        a = (await client.post(
+            "/automations", json={"name": "日报", "schedule": "daily@08:00", "prompt": "写日报"}
+        )).json()
+        assert a["enabled"] is True
+        assert len((await client.get("/automations")).json()["automations"]) == 1
+        # 手动触发 → 跑 agent(mock) → 进 review 队列
+        rev = (await client.post(f"/automations/{a['id']}/run")).json()
+        assert "自动化产出内容" in rev["output"] and rev["status"] == "pending"
+        assert len((await client.get("/review-queue")).json()["reviews"]) == 1
+        decided = (await client.post(f"/review-queue/{rev['id']}", json={"decision": "accept"})).json()
+        assert decided["status"] == "accepted"
+        await client.patch(f"/automations/{a['id']}", json={"enabled": False})
+        assert (await client.get("/automations")).json()["automations"][0]["enabled"] is False
+        assert (await client.delete(f"/automations/{a['id']}")).json()["ok"] is True
+
+
 async def test_assistant_scenario_selected(tmp_path):
     from server.app import _build_engine
 

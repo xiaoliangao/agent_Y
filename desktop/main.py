@@ -40,7 +40,8 @@ def build_app():
 
     dd = _data_dir()
     return create_app(
-        data_dir=dd, db_path=os.path.join(dd, "agenty.db"), approval_mode=ApprovalMode.ASK
+        data_dir=dd, db_path=os.path.join(dd, "agenty.db"),
+        approval_mode=ApprovalMode.ASK, run_scheduler=True,
     )
 
 
