@@ -2,10 +2,10 @@
 
 | 项 | 值 |
 |---|---|
-| 文档版本 | v0.1（draft） |
-| 状态 | 起草中 / 待 2 人 review |
-| 上游依据 | `docs/PRD.md`(v0.3 功能与决策) · `docs/research.md`(技术选型依据) · `docs/code-study-cc.md`(行级借鉴清单) |
-| 适用范围 | M1–M4 核心；M5/M6 仅粗线条 |
+| 文档版本 | **v1.0（系统设计阶段 · 定稿）** |
+| 状态 | 定稿（接口契约 §4 为冻结面）；待 2 人最终 review |
+| 上游依据 | `docs/PRD.md`(v1.0) · `docs/research.md`(选型依据 + 术语) · `docs/code-study-cc.md`(行级借鉴) |
+| 适用范围 | M1–M4 完整设计；**M5（助手全量 / 办公文档）已纳入接口与数据模型**，实现细节随里程碑细化 |
 | 目标读者 | 作者 + 同事（2 人并行开发的接口契约依据） |
 
 > **这份文档解决什么**：PRD 说"做什么"，design 说"怎么搭、谁负责哪块、模块之间怎么对话"。它的核心产出是**接口契约（§4）**——只要契约定死，两人就能各写一边、互不阻塞、最后能拼上。0 基础读者可把它当"施工图纸 + 学习地图"，每节都标了为什么这么设计。
@@ -88,7 +88,8 @@
 | **obs** | `core/obs/` | Tracer 接口 → Langfuse/console | types | — |
 | **eval** | `core/eval/` | 任务集跑分 + 自进化（候选→验证→留升） | 全部 | — |
 | **sandbox** | `core/sandbox/` | Docker 执行器（候选 Java 服务） | — | — |
-| **scenarios** | `core/scenarios/` | 场景插件（coding 先；assistant 后） | tools | 不改内核 |
+| **scenarios** | `core/scenarios/` | 场景插件：`coding`(M1) + `assistant`(M5：文件问答/办公文档/检索/起草)，经工具+skill 接入 | tools | 不改内核 |
+| **scheduler** | `core/scheduler/` | 待办提醒触发 + 定时自动化调度 → 入 review 队列 | tasks, engine | 仅调度，不含业务 |
 | **server** | `server/` | FastAPI REST+SSE，仅翻译 HTTP↔Engine | core | 不含 agent 逻辑 |
 | **cli** | `cli/` | 命令行入口 | core 或 server | — |
 
@@ -202,6 +203,13 @@ class StreamEvent(BaseModel):
 - `POST /eval/runs` — `{ "taskset":string, "model":string }` → `202 { "run_id" }`（异步）
 - `GET /eval/runs/{id}` — `{ "run_id","taskset","model","status","pass_rate"?,"results":[{task_id,passed,detail}],"curve"? }`
 - `GET /tasks/{id}` — `{ "id","type","status","description","output_file"?,"created_at","ended_at"? }`；status ∈ `pending|running|completed|failed|killed`
+
+**个人助手：待办 / 提醒 / 自动化 / 授权目录（F6，M5）**
+- `GET /todos` · `POST /todos` `{text, due?:ISO}` · `PATCH /todos/{id}` `{done?,text?,due?}` · `DELETE /todos/{id}`
+- `GET /reminders` · `POST /reminders` `{todo_id?, text, fire_at:ISO, repeat?:"daily"|"weekly"}` — 到点触发系统通知 + （若 app 在前台）SSE 推送
+- `GET /automations` · `POST /automations` `{name, schedule:"daily@08:00"|cron, prompt|skill, scenario}` · `PATCH`/`DELETE` — 定时自动化；每次跑完产出一个 `task` 入 review 队列
+- `GET /review-queue` · `POST /review-queue/{id}` `{decision:"accept"|"discard"}` — 自动化产出的待审项
+- `GET /folders` · `POST /folders` `{path}` · `DELETE /folders/{id}` — 助手文件问答/整理的**授权目录白名单**（见 §5.2）
 
 #### 4.1.2 SSE 事件目录（完整字段）
 每帧 = `data: <一行 JSON>\n\n`；前端按 `type` 分发：
@@ -331,6 +339,8 @@ class ToolContext:
 
 **M1 内置工具**：`bash`(非只读) · `read_file`/`grep`/`glob`(只读) · `write_file`/`edit_file`(写；`edit_file` 要求先 read 过该文件，PRD F2.3)。
 
+**助手工具集（M5）**：见 §4.6（`web_search` / 文件问答整理 / 办公文档 `docx·pptx·xlsx` / `draft` 起草），均受审批分级 + 授权目录约束、在沙箱内执行。
+
 ### 4.4 core ↔ Sandbox（`core/sandbox/base.py`）
 
 ```python
@@ -375,6 +385,32 @@ class MemoryStore(Protocol):
 - 召回：mtime 倒序截断候选 → 便宜模型挑 ≤5（不确定不选）。
 - 反思沉淀：每轮结束 fork 一个**受限子 agent**（只读 + 只能写 memory 目录、限 turn、强制先查重）。
 
+### 4.6 core ↔ Skill / Scenario（`core/scenarios/`、`skills/`）
+
+**Scenario（场景插件）**：把"一组工具 + 系统提示 + Eval 数据集"打包注册进 runtime，**换场景不改内核**。
+```python
+class Scenario(Protocol):
+    name: str                              # "coding" | "assistant"
+    def tools(self) -> list[Tool]: ...     # 本场景启用的工具
+    def system_prompt(self) -> str: ...
+    def skills_dir(self) -> str | None: ...# 该场景的 skill 目录
+```
+
+**Skill（渐进披露，抄 `code-study-cc.md §5`）**：`skills/<name>/SKILL.md`，frontmatter `name/description/when_to_use` + 正文。**列表只放 (name+一句话) 进 system prompt（占预算 ≤1%）；命中才由 `Skill` 工具加载正文。** 常用事务/办公文档流程都做成 skill。
+
+**助手工具集（M5，均受审批分级 + 授权目录约束）**：
+
+| 工具 | 只读? | 说明 |
+|---|---|---|
+| `web_search` / `web_fetch` | 是 | 网络检索 + 取网页（需放行网络；结果带来源）|
+| `read_dir` / `search_files` | 是 | 在**授权目录**内列/搜文件（§5.2）|
+| `summarize_files` | 是 | 读多个文件做摘要（文件问答/知识库）|
+| `move_file` / `rename_file` | 否(写) | 授权目录内整理，走审批 |
+| `docx_edit` / `pptx_build` / `xlsx_edit` | 否(写) | 办公文档：`python-docx`/`python-pptx`/`openpyxl`，**沙箱内**执行、产物回传供下载 |
+| `draft` | 是 | 起草邮件/周报/文档（纯文本产出，你审后用）|
+
+> 办公文档与文件操作**全在 Docker 沙箱内跑**（PRD F8.2）：把相关授权目录/目标文件挂载进容器，产物写回后回传给用户；模型不直接碰宿主文件系统。
+
 ---
 
 ## 5. 上下文管理设计（harness 层，`core/harness/context.py`）
@@ -417,6 +453,15 @@ def gate(tool, inp, mode) -> PermissionResult:
 
 UI 暴露为可见开关（M2）。来源：`research.md §C-24`（guardrail 并行 + tripwire + 工具风险分级 + 审批暂停门）。
 
+### 5.2 文件夹授权 + 文件访问安全（助手文件操作，`core/harness/fs_access.py`）
+
+助手要读写本地文件，**绝不给"整机访问"**，而是 **目录白名单 + 沙箱挂载**：
+1. 用户**显式授权目录**（`POST /folders`）→ 存进 `authorized_folders` 表。
+2. 任何文件工具的路径**必须落在某授权目录内**：`validate_input` 做 **realpath 前缀校验**（解析符号链接后比对，挡 `..`/软链越界）——越界即 `deny`。
+3. 文件操作在沙箱内执行：**只挂载相关授权目录**（按工具 read-only / read-write），不挂整个 home。
+4. 写/移动/重命名按审批分级(§5.1)确认；**删除视为 `is_destructive` 强制 ask**。
+5. 网络类工具（`web_*`）才放行容器网络，其余默认断网。
+
 ---
 
 ## 6. 可观测 / Eval / 自进化（接口骨架）
@@ -450,6 +495,12 @@ SQLite 表（v1）:
   eval_results(id, run_id, task_id, passed, detail_json)
   improvements(id, run_before, run_after, change_desc, kept: bool, rollback_ref)
   provider_connections(id, provider, base_url, model_default, keychain_ref)  # 无明文 key
+  -- 个人助手 (M5) --
+  todos(id, text, done: bool, due?, created_at)
+  reminders(id, todo_id?, text, fire_at, repeat?, fired: bool)
+  automations(id, name, schedule, prompt_or_skill, scenario, enabled: bool, last_run?)
+  review_queue(id, automation_id, task_id, summary, status, created_at)   # pending/accepted/discarded
+  authorized_folders(id, path, mode, created_at)                          # 助手文件操作白名单
 
 文件系统:
   <project>/memory/<topic>.md         # 记忆（md + frontmatter）
@@ -479,7 +530,8 @@ agent_y/
 │   ├── obs/               tracer.py  langfuse.py
 │   ├── eval/              harness.py  improve.py
 │   ├── sandbox/           base.py  docker.py
-│   └── scenarios/         coding/   assistant/(后)
+│   ├── scheduler/         reminders.py  automations.py
+│   └── scenarios/         coding/   assistant/   (文件问答·办公文档·检索·待办)
 ├── server/                app.py  routes/
 ├── cli/                   main.py
 ├── frontend/              (M2，Web)
@@ -514,12 +566,27 @@ agent_y/
 - **AGENTS.md = 给 agent 的"地图"**（`research.md §C-26`）：约 100 行，写 build/test 命令、目录约定、`docs/` 是 source of truth；别写成千页手册。Agent Y 自己跑编码任务时也读它。
 - **接口契约改动**：改 §4 任一接口 → PR 标题带 `[contract]` 并 @ 对方，合并前必须双方确认。
 
-### 8.4 分工建议（M1，**待定稿确认**）
-> PRD §13：分工待定。下面是基于"接口已隔离"的一个可并行方案：
-- **开发者 A（偏 core）**：`types` + `loop` + `engine` + `providers/anthropic`。
-- **开发者 B（偏工具/基础设施）**：`tools`(协议+4 内置) + `sandbox/docker` + `obs/console` + `cli`。
-- 两人先**一起把 §4 接口冻结**，再各写各的，用 mock 对接；`harness`/`memory`/`eval` M1 先放最小桩。
-- Java（同事擅长）落点在 **M5 沙箱执行器服务**或待办后端——M1 不阻塞。
+### 8.4 团队分工（提案 · 待与同事确认）
+
+> 依据"接口已隔离"原则，按**子系统归属**切——每人拥有清晰边界、只通过 §4 契约对接，互不阻塞。最终以同事的技能/意愿（尤其 Java）微调。
+
+**按子系统长期归属**
+
+| 归属 | 子系统 | 理由 |
+|---|---|---|
+| **作者 A**（主 Python，目标吃透 Agent 内核） | `types` · `loop` · `engine` · `providers` · `harness`(context/approval/fs_access) · `memory` · `eval/自进化` · `scenarios` · 前端(效果驱动) | 这是**学习目标核心**(loop/context/自进化)与简历最值钱处；前端按 PRD 由 AI 实现、作者驱动修改 |
+| **同事 B**（工程/基础设施，Java 落点） | `tools`(协议+内置+助手工具) · `sandbox`(Docker→Java 执行器) · `obs`(tracer/Langfuse) · `server`(FastAPI 路由) · `scheduler`(待办/提醒/自动化) · 办公文档 skills | 边界清晰、工程味重；**Java 候选模块**(沙箱执行器 Spring Boot / 待办后端)正落这边(M5) |
+
+**按里程碑（M1 开工顺序）**
+- **共同第一步**：一起把 **§4 接口冻结**（半天，PR `[contract]` 双确认），再各写各的、用 mock 对接。
+- **A**：Issue #1 types → #3 provider → #4 loop → #10 engine → #11 CLI。
+- **B**：Issue #5 tools → #6 内置工具 → #7 sandbox → #8 审批 → #9 tracer。
+- **共担**：#2(冻结契约)、#12(冒烟测试)、#13(文档)。
+- `harness`/`memory`/`eval` M1 先放最小桩，M2+ 由 A 展开。
+
+**协作纪律**：接口改动走 `[contract]` PR + 双确认；每人在自己子系统内自由迭代；跨子系统只认 §4 契约。
+
+> ⚠️ 本分工是**提案**——需结合同事的技能与偏好定（尤其 Java 经验落在 sandbox 执行器还是待办后端）。建议你拿这张表和同事过一遍再定稿。
 
 ---
 
@@ -556,4 +623,4 @@ agent_y/
 
 ---
 
-> 本文是 M1 开工蓝图；M2 起每进一个里程碑，回填对应模块的详细设计。接口契约（§4）是两人协作的冻结面，改动须双方确认。
+> 本文 v1.0 为系统设计阶段定稿：M1–M4 完整、M5 助手（文件问答/办公文档/检索/待办自动化）已纳入接口与数据模型；M2 起每进一里程碑回填详细设计。接口契约（§4）是冻结面，改动须双方确认。
