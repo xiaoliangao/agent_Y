@@ -4,7 +4,7 @@ import {
   Plus, Settings as SettingsIcon, Code2, Briefcase, ArrowUp, X,
   AlertTriangle, MessageSquare, KeyRound, Clock,
   CloudSun, FolderPlus, CheckSquare, Square, FileCode2, Terminal,
-  Folder, FolderOpen, ChevronRight, FilePlus, RotateCw,
+  Folder, FolderOpen, ChevronRight, FilePlus, RotateCw, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import {
   createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile,
@@ -242,6 +242,7 @@ export default function App() {
   const [openTabs, setOpenTabs] = useState<string[]>([]);      // 编辑器打开的文件
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [fileCache, setFileCache] = useState<Record<string, string>>({});
+  const [navCollapsed, setNavCollapsed] = useState(false);     // 编码模式自动折叠左侧栏
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamId = useRef<string | null>(null);
 
@@ -263,6 +264,7 @@ export default function App() {
   };
   useEffect(() => { refreshThreads(); refreshConfig(); refreshDaily(); }, []);
   useEffect(() => { if (scene === 'assistant') refreshDaily(); else refreshFiles(sessionId); }, [scene, sessionId]);
+  useEffect(() => { setNavCollapsed(scene === 'coding'); }, [scene]);  // 进编码自动折叠侧栏，回助手展开
 
   const addNewTodo = async () => {
     const t = newTodo.trim();
@@ -445,11 +447,32 @@ export default function App() {
 
   return (
     <div className={`flex h-screen w-full overflow-hidden ${scene === 'coding' ? 'theme-ide' : ''}`} style={{ color: 'var(--color-ink)' }}>
-      {/* SIDEBAR */}
+      {/* SIDEBAR —— 编码模式折叠成图标栏 */}
+      {navCollapsed ? (
+        <aside className="w-[56px] shrink-0 hidden md:flex flex-col items-center py-3 gap-1" style={{ background: 'var(--color-panel)', borderRight: '1px solid var(--color-line)' }}>
+          <button onClick={() => setNavCollapsed(false)} title="展开侧栏" className="btn btn-ghost p-2"><PanelLeftOpen className="w-4 h-4" /></button>
+          <div className="my-1"><AgentOrb running={running} size={18} /></div>
+          <button onClick={newThread} title="新对话" className="btn btn-ghost p-2"><Plus className="w-4 h-4" style={{ color: 'var(--color-gold)' }} /></button>
+          <div className="w-7 h-px my-1" style={{ background: 'var(--color-line)' }} />
+          {([['assistant', Briefcase], ['coding', Code2]] as const).map(([s, Icon]) => (
+            <button key={s} onClick={() => setScene(s)} title={s === 'assistant' ? '助手' : '编码'} className="btn p-2"
+              style={scene === s ? { background: 'var(--color-elevated)', color: 'var(--color-ink)' } : { color: 'var(--color-ink-3)' }}>
+              <Icon className="w-4 h-4" />
+            </button>
+          ))}
+          <div className="flex-1" />
+          <button onClick={() => setShowAutos(true)} title="自动化" className="btn btn-ghost p-2 relative">
+            <Clock className="w-4 h-4" />
+            {pendingReviews > 0 && <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-gold)' }} />}
+          </button>
+          <button onClick={() => setShowSettings(true)} title="设置" className="btn btn-ghost p-2"><SettingsIcon className="w-4 h-4" /></button>
+        </aside>
+      ) : (
       <aside className="w-[258px] shrink-0 hidden md:flex flex-col" style={{ background: 'var(--color-panel)', borderRight: '1px solid var(--color-line)' }}>
         <div className="h-16 flex items-center px-5 gap-3">
           <AgentOrb running={running} size={18} />
-          <span className="font-serif text-[22px] leading-none tracking-tight">{agentName}</span>
+          <span className="font-serif text-[22px] leading-none tracking-tight flex-1 truncate">{agentName}</span>
+          <button onClick={() => setNavCollapsed(true)} title="折叠侧栏" className="btn btn-ghost p-1.5"><PanelLeftClose className="w-4 h-4" /></button>
         </div>
 
         <div className="px-4">
@@ -488,6 +511,7 @@ export default function App() {
           <button onClick={() => setShowSettings(true)} className="btn btn-ghost w-full justify-start"><SettingsIcon className="w-4 h-4" /> 设置</button>
         </div>
       </aside>
+      )}
 
       {/* MAIN */}
       <main className="flex-1 flex flex-col min-w-0">
