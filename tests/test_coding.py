@@ -1,7 +1,6 @@
 """edit_file 工具 + 编码场景测试。"""
 from __future__ import annotations
 
-from core.harness.approval import ApprovalMode
 from core.providers.mock import MockProvider, script_text, script_tool
 from core.scenarios.coding.scenario import CodingScenario
 from core.tools.edit import EditFileTool

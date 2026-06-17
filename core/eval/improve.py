@@ -49,10 +49,15 @@ def _split(tasks: list[Task], val_ratio: float) -> tuple[list[Task], list[Task]]
 async def improve(
     tasks: list[Task], *, provider: Any, model: str, base_policy: Policy, tools: list,
     generate_candidate: CandidateGen | None = None, val_ratio: float = 0.5, max_turns: int = 20,
+    judge_model: str | None = None,
 ) -> tuple[ImprovementRecord, Policy]:
-    """一轮自进化。返回 (改进记录, 应采用的 policy[未提升则回滚为 base])。"""
+    """一轮自进化。返回 (改进记录, 应采用的 policy[未提升则回滚为 base])。
+
+    judge_model：反思/评测用的模型（PRD F1.4 eval-judge 角色），默认与任务执行 model 相同。
+    """
+    jm = judge_model or model
     gen: CandidateGen = generate_candidate or (
-        lambda failures, bp: llm_reflect_candidate(failures, bp, provider=provider, model=model)
+        lambda failures, bp: llm_reflect_candidate(failures, bp, provider=provider, model=jm)
     )
     train, val = _split(tasks, val_ratio)
 
@@ -71,13 +76,16 @@ async def improve(
 async def evolve(
     tasks: list[Task], *, provider: Any, model: str, base_policy: Policy, tools: list,
     rounds: int = 3, generate_candidate: CandidateGen | None = None, max_turns: int = 20,
+    judge_model: str | None = None,
 ) -> EvolveResult:
     """多轮自进化（爬山）：每轮据失败学一条经验、只升才累积，产出 pass@1 提升曲线。
 
     注：这里在整个任务集上爬山（in-sample）以画曲线；严格的留出验证见单轮 `improve`。
+    judge_model：反思用模型（F1.4 eval-judge 角色），默认与执行 model 相同。
     """
+    jm = judge_model or model
     gen: CandidateGen = generate_candidate or (
-        lambda failures, bp: llm_reflect_candidate(failures, bp, provider=provider, model=model)
+        lambda failures, bp: llm_reflect_candidate(failures, bp, provider=provider, model=jm)
     )
     policy = base_policy
     run = await run_taskset(tasks, provider=provider, model=model, system=policy.render(), tools=tools, max_turns=max_turns)

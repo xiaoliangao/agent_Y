@@ -53,6 +53,26 @@ async def test_session_message_sse(tmp_path):
         assert len(detail["messages"]) >= 3
 
 
+async def test_file_change_frame_and_revert(tmp_path):
+    provider = MockProvider([
+        script_tool("写", "write_file", {"path": "hello.py", "content": "print(1)\n"}, "t1"),
+        script_text("done"),
+    ])
+    async with _client(_app(tmp_path, provider, ApprovalMode.AUTO)) as client:
+        sid = (await client.post("/sessions", json={"scenario": "coding"})).json()["session_id"]
+        async with client.stream("POST", f"/sessions/{sid}/messages", json={"text": "写 hello.py"}) as resp:
+            frames = await _drain(resp)
+        fc = [f for f in frames if f["type"] == "file_change"]
+        assert len(fc) == 1 and fc[0]["path"] == "hello.py" and "+print(1)" in fc[0]["diff"]
+        # 撤销：写回原内容（空）
+        assert (await client.post(f"/sessions/{sid}/revert", json={"path": "hello.py", "content": ""})).json()["ok"]
+        ws = tmp_path / "data" / "sessions" / sid / "workspace"
+        assert (ws / "hello.py").read_text() == ""
+        # 越界拒绝
+        bad = await client.post(f"/sessions/{sid}/revert", json={"path": "../escape.txt", "content": "x"})
+        assert bad.status_code == 400
+
+
 async def test_session_persists_across_restart(tmp_path):
     async with _client(_app(tmp_path, MockProvider([script_text("hi")]))) as c1:
         sid = (await c1.post("/sessions", json={"title": "persist"})).json()["session_id"]
@@ -114,3 +134,125 @@ async def test_404_and_error_envelope(tmp_path):
 async def test_health(tmp_path):
     async with _client(_app(tmp_path, MockProvider([]))) as client:
         assert (await client.get("/health")).json()["ok"] is True
+
+
+async def test_engine_wires_memory_and_context(tmp_path):
+    from server.app import _build_engine
+
+    app = _app(tmp_path, MockProvider([]))
+    sid = app.state.store.create_session(title="t", scenario="coding")["id"]
+    eng = _build_engine(app, sid)
+    assert eng.context_manager is not None  # 压缩始终开
+    assert eng.memory_store is not None and eng.reflect is True  # 记忆默认开
+
+
+async def test_memory_can_be_disabled(tmp_path):
+    from server.app import _build_engine
+
+    app = create_app(
+        provider=MockProvider([]), db_path=str(tmp_path / "db"),
+        data_dir=str(tmp_path / "d"), memory=False,
+    )
+    sid = app.state.store.create_session(title="t", scenario="coding")["id"]
+    eng = _build_engine(app, sid)
+    assert eng.memory_store is None and eng.reflect is False
+    assert eng.context_manager is not None
+
+
+async def test_folders_crud(tmp_path):
+    async with _client(_app(tmp_path, MockProvider([]))) as client:
+        r = await client.post("/folders", json={"path": str(tmp_path / "docs")})
+        assert r.status_code == 201
+        fid = r.json()["id"]
+        assert any(f["id"] == fid for f in (await client.get("/folders")).json()["folders"])
+        assert (await client.delete(f"/folders/{fid}")).json()["ok"] is True
+        assert (await client.delete(f"/folders/{fid}")).status_code == 404
+
+
+async def test_todos_and_reminders_endpoints(tmp_path):
+    async with _client(_app(tmp_path, MockProvider([]))) as client:
+        t = (await client.post("/todos", json={"text": "买菜"})).json()
+        assert t["text"] == "买菜"
+        await client.patch(f"/todos/{t['id']}", json={"done": True})
+        assert (await client.get("/todos")).json()["todos"][0]["done"] is True
+        rem = (await client.post(
+            "/reminders", json={"text": "r", "fire_at": "2030-01-01T00:00:00Z"}
+        )).json()
+        assert rem["text"] == "r"
+        assert (await client.delete(f"/reminders/{rem['id']}")).json()["ok"] is True
+
+
+async def test_automations_and_review_endpoints(tmp_path):
+    provider = MockProvider([script_text("自动化产出内容")])
+    async with _client(_app(tmp_path, provider, ApprovalMode.AUTO)) as client:
+        a = (await client.post(
+            "/automations", json={"name": "日报", "schedule": "daily@08:00", "prompt": "写日报"}
+        )).json()
+        assert a["enabled"] is True
+        assert len((await client.get("/automations")).json()["automations"]) == 1
+        # 手动触发 → 跑 agent(mock) → 进 review 队列
+        rev = (await client.post(f"/automations/{a['id']}/run")).json()
+        assert "自动化产出内容" in rev["output"] and rev["status"] == "pending"
+        assert len((await client.get("/review-queue")).json()["reviews"]) == 1
+        decided = (await client.post(f"/review-queue/{rev['id']}", json={"decision": "accept"})).json()
+        assert decided["status"] == "accepted"
+        await client.patch(f"/automations/{a['id']}", json={"enabled": False})
+        assert (await client.get("/automations")).json()["automations"][0]["enabled"] is False
+        assert (await client.delete(f"/automations/{a['id']}")).json()["ok"] is True
+
+
+async def test_sandbox_setting_selects_executor(tmp_path):
+    from core.sandbox.docker import DockerSandbox
+    from core.sandbox.local import LocalExecutor
+    from server.app import _sandbox
+
+    app = _app(tmp_path, MockProvider([]))
+    assert isinstance(_sandbox(app, str(tmp_path)), LocalExecutor)  # 默认 local
+    app.state.settings.update(sandbox="docker")
+    assert isinstance(_sandbox(app, str(tmp_path)), DockerSandbox)  # 切 docker（惰性，不连 daemon）
+
+
+async def test_assistant_scenario_selected(tmp_path):
+    from server.app import _build_engine
+
+    app = _app(tmp_path, MockProvider([]))
+    app.state.fs.authorize(str(tmp_path))
+    sid = app.state.store.create_session(title="a", scenario="assistant")["id"]
+    eng = _build_engine(app, sid)
+    names = {t.name for t in eng.tools}
+    assert "read_dir" in names and "xlsx_write" in names
+
+
+async def test_providers_models_settings_endpoints(tmp_path):
+    from tests.test_providers import FakeSecrets
+
+    app = create_app(
+        provider=MockProvider([]), db_path=str(tmp_path / "db"),
+        data_dir=str(tmp_path / "d"), provider_secrets=FakeSecrets(),
+    )
+    async with _client(app) as client:
+        r = await client.post(
+            "/providers", json={"provider": "openai", "api_key": "sk-x", "model_default": "deepseek-chat"}
+        )
+        assert r.status_code == 201 and "sk-x" not in r.text  # 响应不回显 key
+        cid = r.json()["id"]
+        conns = (await client.get("/providers")).json()["connections"]
+        assert conns[0]["active"] is True and "sk-x" not in str(conns)
+        assert (await client.get("/models")).json()["models"]
+        assert (await client.get("/settings")).json()["persona_suggestion"]  # 默认人设建议
+        await client.put("/settings", json={"persona": "私人助理", "default_model": "deepseek-chat"})
+        assert (await client.get("/settings")).json()["settings"]["persona"] == "私人助理"
+        assert (await client.delete(f"/providers/{cid}")).json()["ok"] is True
+
+
+async def test_serves_frontend_when_present(tmp_path):
+    fe = tmp_path / "fe"
+    fe.mkdir()
+    (fe / "index.html").write_text("<h1>Agent Y</h1>")
+    app = create_app(
+        provider=MockProvider([]), db_path=str(tmp_path / "db"),
+        data_dir=str(tmp_path / "d"), frontend_dir=str(fe),
+    )
+    async with _client(app) as client:
+        assert "Agent Y" in (await client.get("/")).text  # 前端首页
+        assert (await client.get("/health")).json()["ok"] is True  # API 仍工作

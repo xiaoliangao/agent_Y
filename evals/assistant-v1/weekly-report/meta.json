@@ -1,0 +1,12 @@
+{
+  "prompt": "根据这些要点起草一段简短的中文周报正文（直接给出正文，不要寒暄、不要解释）：本周完成了登录模块、修复了 3 个线上 bug；下周计划做支付接入。",
+  "criteria": "完整覆盖三件事（登录模块、修复 bug、下周支付）；语言通顺专业、简洁；是可直接发出的正文而非问句或解释。",
+  "rules": [
+    {"type": "contains", "value": "登录"},
+    {"type": "contains", "value": "支付"},
+    {"type": "any", "value": ["bug", "缺陷", "问题"]},
+    {"type": "min_len", "value": 30}
+  ],
+  "pass_threshold": 0.6,
+  "rule_weight": 0.4
+}

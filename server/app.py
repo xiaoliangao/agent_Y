@@ -22,11 +22,22 @@ from pydantic import BaseModel
 
 from core.engine import SessionEngine
 from core.harness.approval import ApprovalMode
+from core.harness.fs_access import FolderAccess
 from core.loop import LoopEvent
+from core.providers.catalog import MODELS
+from core.providers.store import ProviderStore
 from core.sandbox.local import LocalExecutor
+from core.sandbox.recording import RecordingSandbox
+from core.scenarios.assistant.scenario import AssistantScenario
 from core.scenarios.coding.scenario import CodingScenario
+from core.scheduler.automations import check_and_run
+from core.scheduler.store import SchedulerStore
+from core.settings import DEFAULT_PERSONA, SettingsStore
 from core.store import Store
 from core.types import Message, TextBlock
+
+_APPROVAL = {"read_only": ApprovalMode.READ_ONLY, "ask": ApprovalMode.ASK,
+             "auto": ApprovalMode.AUTO, "full": ApprovalMode.FULL}
 
 
 class SessionIn(BaseModel):
@@ -43,9 +54,84 @@ class ApprovalIn(BaseModel):
     scope: str | None = None
 
 
+class FolderIn(BaseModel):
+    path: str
+    mode: str | None = None
+
+
+class TodoIn(BaseModel):
+    text: str
+    due: str | None = None
+
+
+class TodoPatch(BaseModel):
+    done: bool | None = None
+    text: str | None = None
+    due: str | None = None
+
+
+class ReminderIn(BaseModel):
+    text: str
+    fire_at: str
+    todo_id: str | None = None
+    repeat: str | None = None
+
+
+class ProviderIn(BaseModel):
+    provider: str  # anthropic | openai
+    api_key: str
+    base_url: str | None = None
+    model_default: str | None = None
+
+
+class SettingsIn(BaseModel):
+    agent_name: str | None = None
+    persona: str | None = None
+    default_model: str | None = None
+    models: dict[str, str] | None = None  # 按角色配模型 {orchestrator|subagent|judge: model_id}（F1.4）
+    approval_mode: str | None = None
+    sandbox: str | None = None  # local | docker
+    weather_city: str | None = None  # 日常面板天气城市（手动）
+
+
+class AutomationIn(BaseModel):
+    name: str
+    schedule: str  # daily@HH:MM | Nm | Nh
+    prompt: str
+    scenario: str | None = None
+
+
+class AutomationPatch(BaseModel):
+    name: str | None = None
+    schedule: str | None = None
+    prompt: str | None = None
+    scenario: str | None = None
+    enabled: bool | None = None
+
+
+class DecisionIn(BaseModel):
+    decision: str  # accept | discard
+
+
+class RevertIn(BaseModel):
+    path: str
+    content: str
+
+
 def _get_provider(app: FastAPI) -> Any:
     if app.state.provider is not None:
-        return app.state.provider
+        return app.state.provider  # 测试注入
+    conn = app.state.providers.active()  # 用户在设置页配的激活连接（key 在 keychain）
+    if conn:
+        key = app.state.providers.get_key(conn["id"])
+        if conn["provider"] == "openai":
+            from core.providers.openai_compat import OpenAICompatProvider
+
+            return OpenAICompatProvider(api_key=key, base_url=conn["base_url"])
+        from core.providers.anthropic import AnthropicProvider
+
+        return AnthropicProvider(api_key=key)
+    # 兜底：环境变量（向后兼容 / 无连接时）
     prov = os.environ.get("AGENTY_PROVIDER", "anthropic")
     if prov == "openai":
         from core.providers.openai_compat import OpenAICompatProvider
@@ -55,6 +141,64 @@ def _get_provider(app: FastAPI) -> Any:
     from core.providers.anthropic import AnthropicProvider
 
     return AnthropicProvider()
+
+
+def _active_model(app: FastAPI, role: str = "orchestrator") -> str:
+    """某角色的有效模型（PRD F1.4）。
+
+    优先级：设置页该角色配模型 → default_model → 激活连接 model_default → app.state.model。
+    role ∈ {orchestrator(主力/会话主 loop)、subagent(子 agent)、judge(eval 评测)}。
+    """
+    s = app.state.settings
+    role_model = s.model_for(role)
+    if role_model:
+        return role_model
+    data = s.get()
+    if data.get("default_model"):
+        return data["default_model"]
+    conn = app.state.providers.active()
+    if conn and conn.get("model_default"):
+        return conn["model_default"]
+    return app.state.model
+
+
+def _sandbox(app: FastAPI, ws: str) -> Any:
+    """按设置选执行器：docker（容器隔离，需装 Docker）或 local（宿主机，开发友好）。"""
+    if app.state.settings.get().get("sandbox") == "docker":
+        from core.sandbox.docker import DockerSandbox
+
+        return DockerSandbox()
+    return LocalExecutor(ws)
+
+
+async def _run_automation(app: FastAPI, prompt: str, scenario_name: str) -> str:
+    """自动化跑一次 agent（无会话、自动审批），收集助手文本作为产出。"""
+    from core.obs.tracer import build_tracer
+
+    scenario: Any = AssistantScenario(app.state.fs) if scenario_name == "assistant" else CodingScenario()
+    ws = os.path.join(app.state.data_dir, "automations_ws")
+    os.makedirs(ws, exist_ok=True)
+    eng = SessionEngine(
+        provider=_get_provider(app), tools=scenario.tools(),
+        system=app.state.settings.effective_system(scenario.system_prompt()),
+        sandbox=_sandbox(app, ws), model=_active_model(app),
+        approval_mode=ApprovalMode.AUTO, tracer=build_tracer(console=False),
+    )
+    parts: list[str] = []
+    async for ev in eng.submit(prompt):
+        if ev.kind == "text_delta" and ev.text:
+            parts.append(ev.text)
+    return "".join(parts).strip() or "(无输出)"
+
+
+async def _scheduler_loop(app: FastAPI) -> None:
+    interval = getattr(app.state, "scheduler_interval", 60)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await check_and_run(app.state.scheduler, lambda p, s: _run_automation(app, p, s))
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _frames(ev: LoopEvent) -> list[dict]:
@@ -76,13 +220,61 @@ def _frames(ev: LoopEvent) -> list[dict]:
     return []
 
 
+def _file_change_frames(sandbox: Any) -> list[dict]:
+    """RecordingSandbox 的改动 → file_change 帧（path + unified diff + old，供前端审阅/撤销）。"""
+    import difflib
+
+    out: list[dict] = []
+    for path, ch in getattr(sandbox, "changes", {}).items():
+        if ch["old"] == ch["new"]:
+            continue
+        diff = "\n".join(difflib.unified_diff(
+            ch["old"].splitlines(), ch["new"].splitlines(),
+            fromfile=path, tofile=path, lineterm="", n=3,
+        ))
+        out.append({"type": "file_change", "path": path, "diff": diff, "old": ch["old"]})
+    return out
+
+
 def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
-    scenario = CodingScenario()
+    sess = app.state.store.get_session(sid)
+    if sess and sess.get("scenario") == "assistant":
+        scenario: Any = AssistantScenario(app.state.fs)
+    else:
+        scenario = CodingScenario()
     workspace = os.path.join(app.state.data_dir, "sessions", sid, "workspace")
     os.makedirs(workspace, exist_ok=True)
+    provider = _get_provider(app)
+    model = _active_model(app, "orchestrator")  # 会话主 loop（F1.4）
+    sub_model = _active_model(app, "subagent")  # 子 agent 可配更便宜的跑量模型
+    settings = app.state.settings.get()
+    system = app.state.settings.effective_system(scenario.system_prompt())  # 人设 + 场景提示词
+    approval = _APPROVAL.get(settings.get("approval_mode", ""), app.state.approval_mode)
+    # 上下文压缩（始终开，便宜）+ 长期记忆（按 app.state.memory_enabled，跨会话共享）
+    from core.harness.context import ContextManager, context_window_for
+
+    context_manager = ContextManager(
+        provider=provider, model=model, context_window=context_window_for(model)
+    )
+    memory_store = None
+    if app.state.memory_enabled:
+        from core.memory.store import FileMemoryStore
+
+        memory_store = FileMemoryStore(
+            os.path.join(app.state.data_dir, "memory"), provider=provider, model=model
+        )
+    from core.obs.tracer import build_tracer
+    from core.tools.subagent import SpawnAgentTool
+
+    base_tools = scenario.tools()
+    # 每个会话带 spawn_agent（子 agent 用同一组工具但不含 spawn 自身，防递归）；子 agent 走 subagent 角色模型
+    tools = base_tools + [SpawnAgentTool(provider=provider, model=sub_model, tools=base_tools, system=system)]
     eng = SessionEngine(
-        provider=_get_provider(app), tools=scenario.tools(), system=scenario.system_prompt(),
-        sandbox=LocalExecutor(workspace), model=app.state.model, approval_mode=app.state.approval_mode,
+        provider=provider, tools=tools, system=system,
+        sandbox=RecordingSandbox(_sandbox(app, workspace)),  # 记录文件改动供 diff 审阅
+        model=model, approval_mode=approval,
+        tracer=build_tracer(console=False), context_manager=context_manager,
+        memory_store=memory_store, reflect=memory_store is not None,
     )
     eng.messages = [Message.model_validate(m) for m in app.state.store.get_messages(sid)]
     return eng
@@ -110,6 +302,9 @@ async def _event_stream(app: FastAPI, sid: str, engine: SessionEngine, text: str
             async for ev in engine.submit(text):
                 if ev.message is not None:
                     st.store.add_message(sid, ev.message.model_dump())
+                if ev.kind == "done":  # 收尾前先推文件改动 diff
+                    for fr in _file_change_frames(engine.sandbox):
+                        await queue.put(fr)
                 for fr in _frames(ev):
                     await queue.put(fr)
         except asyncio.CancelledError:
@@ -135,25 +330,57 @@ async def _event_stream(app: FastAPI, sid: str, engine: SessionEngine, text: str
         st.store.set_status(sid, "idle")
 
 
+def _default_frontend() -> str:
+    import sys
+
+    if getattr(sys, "frozen", False):  # PyInstaller 打包后：dist 随包(sys._MEIPASS/frontend)
+        return os.path.join(sys._MEIPASS, "frontend")  # type: ignore[attr-defined]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(root, "agent-y", "dist")
+
+
 def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: str | None = None,
-               model: str | None = None, approval_mode: ApprovalMode = ApprovalMode.ASK) -> FastAPI:
+               model: str | None = None, approval_mode: ApprovalMode = ApprovalMode.ASK,
+               memory: bool | None = None, frontend_dir: str | None = None,
+               provider_secrets: Any = None, run_scheduler: bool = False) -> FastAPI:
     app = FastAPI(title="Agent Y", version="0.1.0")
     # 本地单用户：放开 CORS，便于前端 dev server(另一端口) 直连。生产同源(pywebview)时无所谓。
     app.add_middleware(
         CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
     )
-    data_dir = data_dir or ".agenty"
+    # 默认绝对路径（~/.agenty）：打包后 Finder 启动 cwd=/，相对 ".agenty" 会落到只读的 /.agenty
+    data_dir = data_dir or os.environ.get("AGENTY_DATA") or os.path.expanduser("~/.agenty")
     app.state.store = Store(db_path or os.path.join(data_dir, "agenty.db"))
     app.state.provider = provider
     app.state.model = model or os.environ.get("AGENTY_MODEL", "claude-sonnet-4-6")
     app.state.data_dir = data_dir
     app.state.approval_mode = approval_mode
+    app.state.memory_enabled = (
+        memory if memory is not None else os.environ.get("AGENTY_MEMORY", "on") != "off"
+    )
     app.state.approvals = {}   # approval_id -> Future
     app.state.runs = {}        # sid -> {task, engine}
+    app.state.fs = FolderAccess(os.path.join(data_dir, "folders.json"))  # 助手文件夹授权
+    app.state.scheduler = SchedulerStore(os.path.join(data_dir, "scheduler.db"))  # 待办/提醒
+    app.state.providers = ProviderStore(  # BYOK 连接（key 进 keychain）
+        os.path.join(data_dir, "providers.db"), secrets=provider_secrets
+    )
+    app.state.settings = SettingsStore(os.path.join(data_dir, "settings.json"))  # 人设/默认模型/审批
 
     @app.exception_handler(HTTPException)
     async def _http_exc(_req: Request, exc: HTTPException):  # 统一错误信封（design §4.0）
         return JSONResponse(status_code=exc.status_code, content={"error": {"code": exc.detail, "message": exc.detail}})
+
+    if run_scheduler:  # 后台定时调度（桌面/真服开；测试默认关，避免无限循环）
+        @app.on_event("startup")
+        async def _start_scheduler():
+            app.state._sched_task = asyncio.create_task(_scheduler_loop(app))
+
+        @app.on_event("shutdown")
+        async def _stop_scheduler():
+            task = getattr(app.state, "_sched_task", None)
+            if task:
+                task.cancel()
 
     @app.get("/health")
     async def health():
@@ -202,6 +429,208 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
             run["engine"].interrupt()
         return {"ok": True}
 
+    @app.post("/sessions/{sid}/revert")
+    async def revert_file(sid: str, body: RevertIn, request: Request):  # diff 审阅「撤销」：写回原内容
+        ws = os.path.realpath(os.path.join(request.app.state.data_dir, "sessions", sid, "workspace"))
+        target = os.path.realpath(os.path.join(ws, body.path))
+        if target != ws and not target.startswith(ws + os.sep):
+            raise HTTPException(400, "bad_path")  # 防越界
+        os.makedirs(os.path.dirname(target) or ws, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(body.content)
+        return {"ok": True}
+
+    # ---------- 个人助手：文件夹授权 / 待办 / 提醒（M5）----------
+    @app.get("/folders")
+    async def list_folders(request: Request):
+        return {"folders": request.app.state.fs.list()}
+
+    @app.post("/folders", status_code=201)
+    async def add_folder(body: FolderIn, request: Request):
+        return request.app.state.fs.authorize(body.path, mode=body.mode or "read_write")
+
+    @app.delete("/folders/{fid}")
+    async def del_folder(fid: str, request: Request):
+        if not request.app.state.fs.revoke(fid):
+            raise HTTPException(404, "folder_not_found")
+        return {"ok": True}
+
+    @app.get("/todos")
+    async def list_todos(request: Request):
+        return {"todos": request.app.state.scheduler.list_todos()}
+
+    @app.post("/todos", status_code=201)
+    async def add_todo(body: TodoIn, request: Request):
+        return request.app.state.scheduler.add_todo(body.text, due=body.due)
+
+    @app.patch("/todos/{tid}")
+    async def patch_todo(tid: str, body: TodoPatch, request: Request):
+        t = request.app.state.scheduler.update_todo(tid, done=body.done, text=body.text, due=body.due)
+        if t is None:
+            raise HTTPException(404, "todo_not_found")
+        return t
+
+    @app.delete("/todos/{tid}")
+    async def del_todo(tid: str, request: Request):
+        if not request.app.state.scheduler.delete_todo(tid):
+            raise HTTPException(404, "todo_not_found")
+        return {"ok": True}
+
+    @app.get("/reminders")
+    async def list_reminders(request: Request):
+        return {"reminders": request.app.state.scheduler.list_reminders()}
+
+    @app.post("/reminders", status_code=201)
+    async def add_reminder(body: ReminderIn, request: Request):
+        return request.app.state.scheduler.add_reminder(
+            body.text, body.fire_at, todo_id=body.todo_id, repeat=body.repeat
+        )
+
+    @app.delete("/reminders/{rid}")
+    async def del_reminder(rid: str, request: Request):
+        if not request.app.state.scheduler.delete_reminder(rid):
+            raise HTTPException(404, "reminder_not_found")
+        return {"ok": True}
+
+    # ---------- BYOK 连接 / 模型目录 / 设置（F1.2 / F1.3 / F7.2·F7.4）----------
+    @app.get("/providers")
+    async def list_providers(request: Request):  # 绝不返回 key
+        return {"connections": request.app.state.providers.list()}
+
+    @app.post("/providers", status_code=201)
+    async def add_provider(body: ProviderIn, request: Request):
+        return request.app.state.providers.add(
+            body.provider, body.api_key, base_url=body.base_url, model_default=body.model_default
+        )  # key 立即进 keychain，响应不含 key
+
+    @app.post("/providers/{cid}/activate")
+    async def activate_provider(cid: str, request: Request):
+        if not request.app.state.providers.set_active(cid):
+            raise HTTPException(404, "connection_not_found")
+        return {"ok": True}
+
+    @app.delete("/providers/{cid}")
+    async def del_provider(cid: str, request: Request):
+        if not request.app.state.providers.delete(cid):
+            raise HTTPException(404, "connection_not_found")
+        return {"ok": True}
+
+    @app.post("/providers/{cid}/test")
+    async def test_provider(cid: str, request: Request):
+        import time
+
+        ps = request.app.state.providers
+        conn = ps.get(cid)
+        if not conn:
+            raise HTTPException(404, "connection_not_found")
+        key = ps.get_key(cid)
+        if conn["provider"] == "openai":
+            from core.providers.openai_compat import OpenAICompatProvider
+
+            prov: Any = OpenAICompatProvider(api_key=key, base_url=conn["base_url"])
+            model = conn["model_default"] or "deepseek-chat"
+        else:
+            from core.providers.anthropic import AnthropicProvider
+
+            prov = AnthropicProvider(api_key=key)
+            model = conn["model_default"] or "claude-sonnet-4-6"
+        t0 = time.monotonic()
+
+        async def _probe():
+            async for _ev in prov.stream(
+                system="", messages=[Message(role="user", content=[TextBlock(text="hi")])],
+                tools=[], model=model, max_tokens=1,
+            ):
+                return  # 收到首个事件即算连通
+
+        try:
+            await asyncio.wait_for(_probe(), timeout=20)
+            return {"ok": True, "latency_ms": round((time.monotonic() - t0) * 1000)}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}
+
+    @app.get("/models")
+    async def list_models():
+        return {"models": MODELS}
+
+    @app.get("/settings")
+    async def get_settings(request: Request):
+        return {"settings": request.app.state.settings.get(), "persona_suggestion": DEFAULT_PERSONA}
+
+    @app.put("/settings")
+    async def put_settings(body: SettingsIn, request: Request):
+        return {"settings": request.app.state.settings.update(**body.model_dump(exclude_none=True))}
+
+    @app.get("/weather")
+    async def get_weather_ep(request: Request):  # 日常面板：今天/明天天气 + 建议（手动城市）
+        from core.weather import get_weather
+
+        s = request.app.state.settings.get()
+        try:
+            w = await get_weather(
+                city=s.get("weather_city") or "", lat=s.get("weather_lat"),
+                lon=s.get("weather_lon"), label=s.get("weather_label") or "",
+            )
+        except Exception as e:  # noqa: BLE001 - 网络/解析失败不该 500，前端按 ok=False 处理
+            return {"ok": False, "reason": f"{type(e).__name__}"}
+        if w.get("ok") and s.get("weather_lat") is None:  # 首次 geocode 成功 → 缓存经纬度/标签
+            request.app.state.settings.update(
+                weather_lat=w["lat"], weather_lon=w["lon"], weather_label=w["label"]
+            )
+        return w
+
+    # ---------- 定时自动化 + review 队列（F6.6）----------
+    @app.get("/automations")
+    async def list_autos(request: Request):
+        return {"automations": request.app.state.scheduler.list_automations()}
+
+    @app.post("/automations", status_code=201)
+    async def add_auto(body: AutomationIn, request: Request):
+        return request.app.state.scheduler.add_automation(
+            body.name, body.schedule, body.prompt, scenario=body.scenario or "assistant"
+        )
+
+    @app.patch("/automations/{aid}")
+    async def patch_auto(aid: str, body: AutomationPatch, request: Request):
+        a = request.app.state.scheduler.update_automation(aid, **body.model_dump(exclude_none=True))
+        if a is None:
+            raise HTTPException(404, "automation_not_found")
+        return a
+
+    @app.delete("/automations/{aid}")
+    async def del_auto(aid: str, request: Request):
+        if not request.app.state.scheduler.delete_automation(aid):
+            raise HTTPException(404, "automation_not_found")
+        return {"ok": True}
+
+    @app.post("/automations/{aid}/run")
+    async def run_auto(aid: str, request: Request):  # 手动触发一次（不等调度）
+        a = request.app.state.scheduler.get_automation(aid)
+        if not a:
+            raise HTTPException(404, "automation_not_found")
+        out = await _run_automation(request.app, a["prompt"], a["scenario"])
+        request.app.state.scheduler.mark_automation_run(a["id"])
+        return request.app.state.scheduler.add_review(a["id"], a["name"], out)
+
+    @app.get("/review-queue")
+    async def list_rq(request: Request, status: str | None = None):
+        return {"reviews": request.app.state.scheduler.list_reviews(status)}
+
+    @app.post("/review-queue/{rid}")
+    async def decide_rq(rid: str, body: DecisionIn, request: Request):
+        r = request.app.state.scheduler.decide_review(rid, body.decision)
+        if r is None:
+            raise HTTPException(404, "review_not_found")
+        return r
+
+    # 末尾挂载前端静态产物（若存在）：打包后桌面窗口直接 http://127.0.0.1:port/ 同源访问。
+    # 必须在所有 API 路由之后挂载，"/" 兜底不抢 API。
+    frontend = frontend_dir or os.environ.get("AGENTY_FRONTEND") or _default_frontend()
+    if frontend and os.path.isdir(frontend):
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount("/", StaticFiles(directory=frontend, html=True), name="frontend")
+
     return app
 
 
@@ -209,5 +638,5 @@ def _env_approval() -> ApprovalMode:
     return ApprovalMode.AUTO if os.environ.get("AGENTY_APPROVAL", "ask") == "auto" else ApprovalMode.ASK
 
 
-app = create_app(approval_mode=_env_approval())  # 供 `uvicorn server.app:app` 使用
+app = create_app(approval_mode=_env_approval(), run_scheduler=True)  # 供 `uvicorn server.app:app` 使用
 

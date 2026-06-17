@@ -1,8 +1,7 @@
-// Agent Y 后端客户端：会话 + SSE 流 + 审批。对应 docs/design.md §4.1。
-// 后端地址可用 VITE_API_BASE 覆盖，默认本机 8765。
+// Agent Y 后端客户端：会话 + SSE 流 + 审批 + BYOK/设置/助手。对应 docs/design.md §4.1。
+// 默认同源（打包后桌面窗口与后端同在 127.0.0.1:8765）；dev 用 VITE_API_BASE 指向后端。
 
-const BASE: string =
-  (import.meta as any).env?.VITE_API_BASE || "http://127.0.0.1:8765";
+const BASE: string = (import.meta as any).env?.VITE_API_BASE ?? "";
 
 export type Frame =
   | { type: "text_delta"; text: string }
@@ -11,59 +10,114 @@ export type Frame =
   | { type: "tool_result"; id: string; is_error: boolean; preview: string }
   | { type: "approval_request"; approval_id: string; tool: string; summary?: string; risk: string }
   | { type: "usage"; input_tokens: number; output_tokens: number }
-  | { type: "span"; span: any }
+  | { type: "file_change"; path: string; diff: string; old: string }
   | { type: "done"; reason: string }
   | { type: "error"; message: string; code?: string };
 
 export interface SessionSummary {
-  id: string;
-  title: string;
-  scenario: string;
-  status: string;
-  updated_at: string;
-  message_count: number;
+  id: string; title: string; scenario: string; status: string;
+  updated_at: string; message_count: number;
+}
+export interface Connection {
+  id: string; provider: string; base_url?: string | null;
+  model_default?: string | null; active: boolean; created_at: string;
+}
+export interface ModelInfo {
+  id: string; provider: string; label: string; context_window: number;
+  supports_tools: boolean; supports_thinking: boolean; price_in: number; price_out: number;
+}
+export interface Settings {
+  agent_name: string; persona: string; default_model: string;
+  models?: Record<string, string>;  // 按角色配模型 {orchestrator|subagent|judge}（F1.4）
+  approval_mode: string | null; sandbox?: string;
+  weather_city?: string; weather_label?: string;  // 日常面板天气城市（手动）
+}
+export interface Todo { id: string; text: string; done: boolean; due?: string | null; created_at: string; }
+export interface Folder { id: string; path: string; mode: string; }
+export interface WeatherDay {
+  date: string; code: number; text: string;
+  tmax: number | null; tmin: number | null; precip_prob: number | null;
+}
+export interface Weather {
+  ok: boolean; reason?: string; label?: string;
+  today?: WeatherDay | null; tomorrow?: WeatherDay | null; advice?: string;
 }
 
+async function j<T>(url: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(`${BASE}${url}`, init);
+  if (!r.ok) throw new Error(`${init?.method || "GET"} ${url} → ${r.status}`);
+  return (await r.json()) as T;
+}
+const post = (url: string, body?: any) =>
+  j(url, { method: "POST", headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+
+// ---------- 会话 ----------
 export async function createSession(title?: string, scenario = "coding"): Promise<string> {
-  const r = await fetch(`${BASE}/sessions`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title, scenario }),
-  });
-  if (!r.ok) throw new Error(`createSession failed: ${r.status}`);
-  return (await r.json()).session_id;
+  return (await post("/sessions", { title, scenario }) as any).session_id;
 }
-
 export async function listSessions(): Promise<SessionSummary[]> {
-  const r = await fetch(`${BASE}/sessions`);
-  if (!r.ok) return [];
-  return (await r.json()).sessions ?? [];
+  return j<{ sessions: SessionSummary[] }>("/sessions").then((d) => d.sessions ?? []).catch(() => []);
 }
-
 export async function getSessionMessages(sid: string): Promise<{ role: string; content: any[] }[]> {
-  const r = await fetch(`${BASE}/sessions/${sid}`);
-  if (!r.ok) return [];
-  return (await r.json()).messages ?? [];
+  return j<{ messages: any[] }>(`/sessions/${sid}`).then((d) => d.messages ?? []).catch(() => []);
+}
+export const postApproval = (approvalId: string, decision: "allow" | "deny") =>
+  post(`/approvals/${approvalId}`, { decision });
+export const interruptSession = (sid: string) => post(`/sessions/${sid}/interrupt`);
+export const revertFile = (sid: string, path: string, content: string) => post(`/sessions/${sid}/revert`, { path, content });
+
+// ---------- BYOK / 模型 / 设置 ----------
+export const listProviders = () => j<{ connections: Connection[] }>("/providers").then((d) => d.connections ?? []).catch(() => []);
+export const addProvider = (p: { provider: string; api_key: string; base_url?: string; model_default?: string }) => post("/providers", p);
+export const activateProvider = (id: string) => post(`/providers/${id}/activate`);
+export const deleteProvider = (id: string) => j(`/providers/${id}`, { method: "DELETE" });
+export const testProvider = (id: string) => post(`/providers/${id}/test`) as Promise<{ ok: boolean; latency_ms?: number; error?: string }>;
+export const listModels = () => j<{ models: ModelInfo[] }>("/models").then((d) => d.models ?? []).catch(() => []);
+export const getSettings = () => j<{ settings: Settings; persona_suggestion: string }>("/settings");
+export const putSettings = (s: Partial<Settings>) => j<{ settings: Settings }>("/settings", {
+  method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(s),
+});
+
+// ---------- 助手：待办 / 授权目录 ----------
+export const listTodos = () => j<{ todos: Todo[] }>("/todos").then((d) => d.todos ?? []).catch(() => []);
+export const addTodo = (text: string, due?: string) => post("/todos", { text, due });
+export const patchTodo = (id: string, patch: Partial<Todo>) => j(`/todos/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
+export const deleteTodo = (id: string) => j(`/todos/${id}`, { method: "DELETE" });
+export const listFolders = () => j<{ folders: Folder[] }>("/folders").then((d) => d.folders ?? []).catch(() => []);
+export const addFolder = (path: string, mode = "read_write") => post("/folders", { path, mode });
+export const deleteFolder = (id: string) => j(`/folders/${id}`, { method: "DELETE" });
+export const getWeather = () => j<Weather>("/weather").catch(() => ({ ok: false } as Weather));
+
+// 原生目录选择：打包的 pywebview 窗口注入了 window.pywebview.api.pick_folder；浏览器 dev 时没有
+export const hasNativeFolderPick = (): boolean =>
+  typeof (window as any).pywebview?.api?.pick_folder === "function";
+export async function pickFolderNative(): Promise<string | null> {
+  try { return (await (window as any).pywebview.api.pick_folder()) || null; }
+  catch { return null; }
 }
 
-export async function postApproval(approvalId: string, decision: "allow" | "deny"): Promise<void> {
-  await fetch(`${BASE}/approvals/${approvalId}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ decision }),
-  });
+// ---------- 定时自动化 + 待审队列 ----------
+export interface Automation {
+  id: string; name: string; schedule: string; prompt: string; scenario: string;
+  enabled: boolean; last_run?: string | null; created_at: string;
 }
-
-export async function interruptSession(sid: string): Promise<void> {
-  await fetch(`${BASE}/sessions/${sid}/interrupt`, { method: "POST" });
+export interface Review {
+  id: string; automation_id: string; title: string; output: string; status: string; created_at: string;
 }
+export const listAutomations = () => j<{ automations: Automation[] }>("/automations").then((d) => d.automations ?? []).catch(() => []);
+export const addAutomation = (a: { name: string; schedule: string; prompt: string; scenario?: string }) => post("/automations", a);
+export const patchAutomation = (id: string, patch: Partial<Automation>) =>
+  j(`/automations/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
+export const deleteAutomation = (id: string) => j(`/automations/${id}`, { method: "DELETE" });
+export const runAutomation = (id: string) => post(`/automations/${id}/run`) as Promise<Review>;
+export const listReviews = (status?: string) =>
+  j<{ reviews: Review[] }>(`/review-queue${status ? `?status=${status}` : ""}`).then((d) => d.reviews ?? []).catch(() => []);
+export const decideReview = (id: string, decision: "accept" | "discard") => post(`/review-queue/${id}`, { decision });
 
-// 发消息并逐帧消费 SSE（text/event-stream）。用法：for await (const fr of streamMessage(sid, text)) {...}
+// 发消息并逐帧消费 SSE（text/event-stream）。
 export async function* streamMessage(sid: string, text: string): AsyncGenerator<Frame> {
   const r = await fetch(`${BASE}/sessions/${sid}/messages`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text }),
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }),
   });
   if (!r.ok || !r.body) {
     yield { type: "error", message: `请求失败: ${r.status}` };
@@ -83,11 +137,7 @@ export async function* streamMessage(sid: string, text: string): AsyncGenerator<
       buf = buf.slice(idx + 2);
       const line = chunk.split("\n").find((l) => l.startsWith("data: "));
       if (line) {
-        try {
-          yield JSON.parse(line.slice(6)) as Frame;
-        } catch {
-          /* 跳过不完整帧 */
-        }
+        try { yield JSON.parse(line.slice(6)) as Frame; } catch { /* 跳过不完整帧 */ }
       }
     }
   }

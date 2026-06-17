@@ -1,37 +1,91 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Fraunces", ui-serif, Georgia, serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* 暖纸·浅色 —— 米白稿纸 + 墨 + 陶土，温暖、编辑感、久看不累 */
+  --color-bg: #f7f4ee;       /* 纸底 */
+  --color-panel: #fdfbf5;    /* 卡片/侧栏 */
+  --color-elevated: #f0ebdf; /* 内嵌/气泡/未选中底 */
+  --color-line: #e7e1d4;     /* 发丝线 */
+  --color-line-2: #d8d1c1;   /* 较实线 */
+  --color-ink: #2b2a27;      /* 墨 */
+  --color-ink-2: #6b6760;    /* 次级 */
+  --color-ink-3: #a39e92;    /* 弱化 */
+  --color-gold: #c06a4d;     /* 强调：陶土/赤陶 */
+  --color-gold-2: #cd7a5d;
+  --color-danger: #bf4f3d;
+  --color-ok: #5b8c6e;
 }
 
+* { border-color: var(--color-line); }
+
+html, body, #root { height: 100%; }
 body {
-  @apply bg-[#FAFAFC] text-gray-900;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-image:
+    radial-gradient(820px 460px at 82% -10%, rgba(192,106,77,0.06), transparent 60%),
+    radial-gradient(640px 380px at 6% 112%, rgba(192,106,77,0.035), transparent 55%);
+  background-attachment: fixed;
 }
 
-/* Elegant minimalist scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  @apply bg-gray-200 rounded-full border-2 border-white;
-}
-::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-300;
-}
+::selection { background: rgba(192,106,77,0.22); }
 
-/* Hide scrollbar for clean internal areas but keep functionality */
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-line-2); border-radius: 9px; border: 3px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #c4bca8; background-clip: padding-box; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+textarea, input { font-family: inherit; }
+
+.card { background: var(--color-panel); border: 1px solid var(--color-line); border-radius: 14px; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border-radius: 10px;
+  font-weight: 500; font-size: 13px; padding: 8px 14px; transition: all .15s ease;
+  border: 1px solid transparent; cursor: pointer; }
+.btn-ghost { color: var(--color-ink-2); }
+.btn-ghost:hover { color: var(--color-ink); background: rgba(43,42,39,0.05); }
+.btn-outline { color: var(--color-ink); border-color: var(--color-line-2); background: var(--color-panel); }
+.btn-outline:hover { border-color: var(--color-ink-3); }
+.btn-gold { background: var(--color-gold); color: #fff7f1; font-weight: 600; }
+.btn-gold:hover { background: var(--color-gold-2); }
+.btn-gold:disabled { opacity: .45; cursor: not-allowed; }
+
+.field { width: 100%; background: #fffefb; border: 1px solid var(--color-line-2); border-radius: 11px;
+  padding: 11px 13px; font-size: 13.5px; color: var(--color-ink); outline: none;
+  transition: border-color .15s, box-shadow .15s; }
+.field::placeholder { color: var(--color-ink-3); }
+.field:hover { border-color: var(--color-ink-3); }
+.field:focus { border-color: var(--color-gold); box-shadow: 0 0 0 3px rgba(192,106,77,0.14); }
+
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--color-ink-3); font-weight: 600; }
+
+/* 进入动效（克制） */
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise .4s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes blink { 0%,100% { opacity: .25; } 50% { opacity: 1; } }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+@keyframes ring { 0% { transform: scale(.85); opacity: .5; } 100% { transform: scale(1.9); opacity: 0; } }
+
+/* 呼吸灯：状态点柔和明暗 + 光晕脉动 */
+@keyframes glow {
+  0%,100% { opacity: .55; box-shadow: 0 0 0 0 rgba(91,140,110,0.0); }
+  50%     { opacity: 1;   box-shadow: 0 0 7px 1.5px rgba(91,140,110,0.55); }
 }
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
+/* IDE diff：逐行揭示 + 末行光标 */
+@keyframes linein { from { opacity: 0; transform: translateX(-5px); } to { opacity: 1; transform: none; } }
+.diff-line { animation: linein .26s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes caret { 0%,100% { opacity: 0; } 50% { opacity: 1; } }
+.caret { display: inline-block; width: 7px; height: 1.05em; vertical-align: text-bottom;
+  background: var(--color-gold); margin-left: 2px; border-radius: 1px; animation: caret 1s step-end infinite; }

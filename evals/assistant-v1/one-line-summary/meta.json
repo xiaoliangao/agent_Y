@@ -1,0 +1,11 @@
+{
+  "prompt": "用一句话（不超过 60 字）总结：Agent Y 是一个能编码、能处理日常事务（文件/文档/待办）、并能据评测结果自进化的个人桌面助手。只输出这一句话。",
+  "criteria": "一句话、准确抓住核心（编码 + 日常事务 + 自进化的个人助手）、简洁不啰嗦、不超长。",
+  "rules": [
+    {"type": "contains", "value": "Agent Y"},
+    {"type": "any", "value": ["编码", "代码"]},
+    {"type": "max_len", "value": 120}
+  ],
+  "pass_threshold": 0.6,
+  "rule_weight": 0.4
+}

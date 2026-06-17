@@ -6,6 +6,8 @@ references/
 node_modules/
 dist/
 build/
+packaging/AgentY.iconset/
+packaging/icon_1024.png
 __pycache__/
 *.pyc
 .venv/

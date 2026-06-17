@@ -1,296 +1,451 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  MessageSquare, Sparkles, Plus, Settings, ChevronDown,
-  Code2, Briefcase, Play, Check, Terminal,
-  Box, Database, ArrowRight, ChevronRight, AlertTriangle, X,
+  Plus, Settings as SettingsIcon, Code2, Briefcase, ArrowUp, Check, X,
+  AlertTriangle, Activity, MessageSquare, KeyRound, Clock,
+  CloudSun, FolderPlus, CheckSquare, Square,
 } from 'lucide-react';
 import {
-  createSession, listSessions, getSessionMessages, streamMessage, postApproval,
-  type Frame, type SessionSummary,
+  createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile,
+  listProviders, getSettings, listReviews,
+  listTodos, addTodo, patchTodo, listFolders, addFolder, deleteFolder,
+  getWeather, hasNativeFolderPick, pickFolderNative,
+  type Frame, type SessionSummary, type Connection, type Todo, type Folder, type Weather, type WeatherDay,
 } from './api';
+import SettingsPanel from './Settings';
+import AutomationsPanel from './Automations';
 
 type Msg = { id: string; role: 'user' | 'assistant'; content: string };
 type Step = { id: string; label: string; target?: string; status: 'running' | 'done' | 'error' };
 type Approval = Extract<Frame, { type: 'approval_request' }>;
+type FileChange = Extract<Frame, { type: 'file_change' }>;
 
-const uid = () => Math.random().toString(36).slice(2);
-
-function traceTarget(input: Record<string, any>): string {
-  if (input?.path) return String(input.path);
-  if (input?.cmd) return String(input.cmd);
-  const v = Object.values(input || {})[0];
-  return v !== undefined ? String(v) : '';
+// IDE 风格动态 diff：编辑器窗框(红黄绿灯+文件标签) + 行号槽 + 逐行揭示动画 + 末行光标。
+// 保留(关掉卡片) / 撤销(写回原内容)。
+function DiffCard({ ch, onKeep, onRevert }: { ch: FileChange; onKeep: () => void; onRevert: () => void }) {
+  const lines = ch.diff.split('\n');
+  // 最后一条新增行 → 末尾打一个闪烁光标，营造"刚敲进去"的动态感
+  const lastAdd = lines.reduce((acc, l, i) => (l[0] === '+' && !l.startsWith('+++') ? i : acc), -1);
+  const adds = lines.filter((l) => l[0] === '+' && !l.startsWith('+++')).length;
+  const dels = lines.filter((l) => l[0] === '-' && !l.startsWith('---')).length;
+  return (
+    <div className="rise rounded-xl overflow-hidden mb-3"
+      style={{ border: '1px solid var(--color-line-2)', boxShadow: '0 10px 28px rgba(60,40,30,0.08)' }}>
+      <div className="flex items-center gap-2 px-3.5 h-9 shrink-0" style={{ background: 'var(--color-elevated)', borderBottom: '1px solid var(--color-line)' }}>
+        <span className="flex gap-1.5">
+          {['#e0796a', '#d9a441', '#5b8c6e'].map((c) => <span key={c} className="w-2.5 h-2.5 rounded-full" style={{ background: c, opacity: 0.85 }} />)}
+        </span>
+        <span className="font-mono text-[12px] ml-1.5 truncate" style={{ color: 'var(--color-ink-2)' }}>{ch.path}</span>
+        <span className="font-mono text-[10.5px] ml-1.5 shrink-0" style={{ color: 'var(--color-ink-3)' }}>
+          <span style={{ color: 'var(--color-ok)' }}>+{adds}</span> <span style={{ color: 'var(--color-danger)' }}>−{dels}</span>
+        </span>
+        <span className="ml-auto flex gap-1.5 shrink-0">
+          <button onClick={onRevert} className="btn btn-ghost text-[11px] px-2 py-1">撤销</button>
+          <button onClick={onKeep} className="btn btn-gold text-[11px] px-2.5 py-1">保留</button>
+        </span>
+      </div>
+      <div className="overflow-x-auto no-scrollbar" style={{ background: 'var(--color-panel)' }}>
+        <pre className="text-[11.5px] font-mono leading-[1.62] py-2">
+          {lines.map((line, i) => {
+            const c = line[0];
+            const isHunk = line.startsWith('@@');
+            const isMeta = line.startsWith('+++') || line.startsWith('---');
+            const add = c === '+' && !isMeta, del = c === '-' && !isMeta;
+            const bg = add ? 'rgba(91,140,110,0.13)' : del ? 'rgba(191,79,61,0.11)' : 'transparent';
+            const col = isHunk ? 'var(--color-gold)' : add ? 'var(--color-ok)' : del ? 'var(--color-danger)' : 'var(--color-ink-2)';
+            const sign = add ? '+' : del ? '−' : '';
+            const text = (isMeta || isHunk) ? line : line.slice(1);
+            return (
+              <div key={i} className="diff-line flex" style={{ background: bg, animationDelay: `${Math.min(i, 50) * 20}ms` }}>
+                <span className="select-none text-right shrink-0" style={{ width: 34, paddingRight: 9, color: 'var(--color-ink-3)', opacity: 0.55 }}>{i + 1}</span>
+                <span className="select-none shrink-0 text-center" style={{ width: 14, color: col }}>{sign}</span>
+                <span style={{ color: col, whiteSpace: 'pre', paddingRight: 14 }}>{text || ' '}{i === lastAdd && <span className="caret" />}</span>
+              </div>
+            );
+          })}
+        </pre>
+      </div>
+    </div>
+  );
 }
 
-// 把后端存的消息（含 tool_use/tool_result 块）映射成 chat 文本气泡
+const uid = () => Math.random().toString(36).slice(2);
+const target = (input: Record<string, any>) =>
+  String(input?.path ?? input?.command ?? input?.cmd ?? Object.values(input || {})[0] ?? '');
+
 function toChat(stored: { role: string; content: any[] }[]): Msg[] {
   const out: Msg[] = [];
   for (const m of stored) {
-    const text = (m.content || [])
-      .filter((b) => b.type === 'text' && b.text)
-      .map((b) => b.text)
-      .join('\n');
+    const text = (m.content || []).filter((b) => b.type === 'text' && b.text).map((b) => b.text).join('\n');
     if (text) out.push({ id: uid(), role: m.role === 'user' ? 'user' : 'assistant', content: text });
   }
   return out;
 }
 
+function greet(): string {
+  const h = new Date().getHours();
+  return h < 5 ? '夜深了。' : h < 11 ? '早上好。' : h < 14 ? '中午好。' : h < 18 ? '下午好。' : '晚上好。';
+}
+
+// Agent「在场感」光圈：扁平细环 + 中心点（轨道感，呼应图标）；运行时转一道弧。小尺寸用状态点。
+function AgentOrb({ running, size = 48 }: { running: boolean; size?: number }) {
+  const gold = 'var(--color-gold)';
+  if (size < 22) {
+    return (
+      <span className="relative inline-flex shrink-0" style={{ width: size, height: size }}>
+        {running && <span className="absolute inset-0 rounded-full" style={{ border: `1.5px solid ${gold}`, animation: 'ring 1.5s ease-out infinite' }} />}
+        <span className="m-auto rounded-full" style={{ width: size * 0.46, height: size * 0.46, background: gold, animation: running ? 'blink 1.2s infinite' : 'none' }} />
+      </span>
+    );
+  }
+  const ring = (inset: string | number, op: number) =>
+    ({ position: 'absolute' as const, inset, borderRadius: 9999, border: `1.5px solid ${gold}`, opacity: op });
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <div style={{ ...ring(0, 0.38), animation: `breathe ${running ? 2.4 : 6}s ease-in-out infinite` }} />
+      <div style={ring('24%', 0.7)} />
+      <div className="absolute rounded-full" style={{ inset: '44%', background: gold }} />
+      {running && <div className="absolute rounded-full" style={{ inset: 0, border: '1.5px solid transparent', borderTopColor: gold, animation: 'spin 0.9s linear infinite' }} />}
+    </div>
+  );
+}
+
+// 右上角「在线」状态点：呼吸灯。在线=绿点柔和明暗+光晕脉动；运行=金点闪烁+外扩环。
+function StatusDot({ running }: { running: boolean }) {
+  const color = running ? 'var(--color-gold)' : 'var(--color-ok)';
+  return (
+    <span className="relative inline-flex shrink-0" style={{ width: 9, height: 9 }}>
+      {running && <span className="absolute rounded-full" style={{ inset: -3, border: `1.5px solid ${color}`, animation: 'ring 1.4s ease-out infinite' }} />}
+      <span className="m-auto rounded-full" style={{ width: 9, height: 9, background: color,
+        animation: running ? 'blink 1s infinite' : 'glow 2.6s ease-in-out infinite' }} />
+    </span>
+  );
+}
+
+// 日常面板里的单日天气
+function Wx({ day, label }: { day: WeatherDay; label: string }) {
+  return (
+    <div className="text-center flex-1">
+      <div className="text-[11px] mb-1" style={{ color: 'var(--color-ink-3)' }}>{label}</div>
+      <div className="text-[13.5px]" style={{ color: 'var(--color-ink)' }}>{day.text}</div>
+      <div className="text-[12px] mt-1" style={{ color: 'var(--color-ink-2)' }}>
+        {day.tmax != null ? `${Math.round(day.tmax)}°` : '—'}
+        <span style={{ color: 'var(--color-ink-3)' }}> / {day.tmin != null ? `${Math.round(day.tmin)}°` : '—'}</span>
+      </div>
+      {day.precip_prob != null && day.precip_prob >= 30 &&
+        <div className="text-[10.5px] mt-0.5" style={{ color: 'var(--color-gold)' }}>降水 {day.precip_prob}%</div>}
+    </div>
+  );
+}
+
 export default function App() {
-  const [scene, setScene] = useState<'coding' | 'assistant'>('coding');
+  const [scene, setScene] = useState<'coding' | 'assistant'>('assistant');
   const [threads, setThreads] = useState<SessionSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [trace, setTrace] = useState<Step[]>([]);
-  const [inputValue, setInputValue] = useState('');
+  const [changes, setChanges] = useState<FileChange[]>([]);
+  const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showAutos, setShowAutos] = useState(false);
+  const [pendingReviews, setPendingReviews] = useState(0);
+  const [conns, setConns] = useState<Connection[]>([]);
+  const [agentName, setAgentName] = useState('Agent Y');
+  const [weather, setWeather] = useState<Weather | null>(null);
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [newTodo, setNewTodo] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
-  const streamingIdRef = useRef<string | null>(null); // 当前正在逐字累积的助手气泡 id
+  const streamId = useRef<string | null>(null);
 
-  const refreshThreads = async () => setThreads(await listSessions().catch(() => []));
-  useEffect(() => { refreshThreads(); }, []);
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, trace]);
+  const refreshThreads = () => listSessions().then(setThreads).catch(() => {});
+  const refreshConfig = () => {
+    listProviders().then(setConns).catch(() => {});
+    getSettings().then((d) => setAgentName(d.settings.agent_name || 'Agent Y')).catch(() => {});
+    listReviews('pending').then((r) => setPendingReviews(r.length)).catch(() => {});
+  };
+  // 日常面板数据：当天待办 + 天气 + 已授权目录（助手场景用）
+  const refreshDaily = () => {
+    listTodos().then(setTodos).catch(() => {});
+    listFolders().then(setFolders).catch(() => {});
+    getWeather().then(setWeather).catch(() => {});
+  };
+  useEffect(() => { refreshThreads(); refreshConfig(); refreshDaily(); }, []);
+  useEffect(() => { if (scene === 'assistant') refreshDaily(); }, [scene]);
 
-  const handleFrame = (fr: Frame) => {
-    switch (fr.type) {
-      case 'text_delta': {
-        if (!fr.text) break;
-        const cur = streamingIdRef.current;
-        if (cur) {
-          setMessages((p) => p.map((m) => (m.id === cur ? { ...m, content: m.content + fr.text } : m)));
-        } else {
-          const id = uid();
-          streamingIdRef.current = id;
-          setMessages((p) => [...p, { id, role: 'assistant', content: fr.text }]);
-        }
-        break;
-      }
-      case 'tool_use':
-        streamingIdRef.current = null; // 工具调用 → 结束当前文本气泡
-        setTrace((p) => [...p, { id: fr.id, label: fr.name, target: traceTarget(fr.input), status: 'running' }]);
-        break;
-      case 'tool_result':
-        setTrace((p) => p.map((s) => (s.id === fr.id ? { ...s, status: fr.is_error ? 'error' : 'done' } : s)));
-        break;
-      case 'approval_request':
-        setApproval(fr);
-        break;
-      case 'done':
-        streamingIdRef.current = null;
-        break;
-      case 'error':
-        setError(fr.message);
-        break;
-    }
+  const addNewTodo = async () => {
+    const t = newTodo.trim();
+    if (!t) return;
+    setNewTodo('');
+    await addTodo(t).catch(() => {});
+    refreshDaily();
+  };
+  const toggleTodo = async (td: Todo) => { await patchTodo(td.id, { done: !td.done }).catch(() => {}); refreshDaily(); };
+  const pickFolder = async () => {
+    let path: string | null = null;
+    if (hasNativeFolderPick()) path = await pickFolderNative();
+    else path = window.prompt('输入要授权助手读取的文件夹绝对路径：');
+    if (path && path.trim()) { await addFolder(path.trim()).catch(() => {}); refreshDaily(); }
+  };
+  const removeFolder = async (id: string) => { await deleteFolder(id).catch(() => {}); refreshDaily(); };
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [messages, trace, running]);
+
+  const active = conns.find((c) => c.active);
+
+  const onFrame = (fr: Frame) => {
+    if (fr.type === 'text_delta' && fr.text) {
+      const cur = streamId.current;
+      if (cur) setMessages((p) => p.map((m) => (m.id === cur ? { ...m, content: m.content + fr.text } : m)));
+      else { const id = uid(); streamId.current = id; setMessages((p) => [...p, { id, role: 'assistant', content: fr.text }]); }
+    } else if (fr.type === 'tool_use') {
+      streamId.current = null;
+      setTrace((p) => [...p, { id: fr.id, label: fr.name, target: target(fr.input), status: 'running' }]);
+    } else if (fr.type === 'tool_result') {
+      setTrace((p) => p.map((s) => (s.id === fr.id ? { ...s, status: fr.is_error ? 'error' : 'done' } : s)));
+    } else if (fr.type === 'approval_request') setApproval(fr);
+    else if (fr.type === 'file_change') setChanges((p) => [...p.filter((c) => c.path !== fr.path), fr]);
+    else if (fr.type === 'done') streamId.current = null;
+    else if (fr.type === 'error') setError(fr.message);
   };
 
-  const handleRun = async () => {
-    const text = inputValue.trim();
+  const run = async () => {
+    const text = input.trim();
     if (running || !text) return;
-    setInputValue('');
-    setError(null);
-    setRunning(true);
+    setInput(''); setError(null); setRunning(true); setChanges([]);
     setMessages((p) => [...p, { id: uid(), role: 'user', content: text }]);
-    streamingIdRef.current = null;
+    streamId.current = null;
     try {
       let sid = sessionId;
-      if (!sid) {
-        sid = await createSession(text.slice(0, 40), scene);
-        setSessionId(sid);
-        refreshThreads();
-      }
-      for await (const fr of streamMessage(sid, text)) handleFrame(fr);
+      if (!sid) { sid = await createSession(text.slice(0, 40), scene); setSessionId(sid); }
+      for await (const fr of streamMessage(sid, text)) onFrame(fr);
       refreshThreads();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setRunning(false);
-      setApproval(null);
-    }
+    } catch (e) { setError(String(e)); }
+    finally { setRunning(false); setApproval(null); }
   };
 
-  const decide = async (decision: 'allow' | 'deny') => {
-    const a = approval;
-    setApproval(null);
-    if (a) await postApproval(a.approval_id, decision); // 后端恢复，进行中的 SSE 继续收帧
-  };
-
-  const newThread = async () => {
-    const sid = await createSession('新会话', scene).catch(() => null);
-    setSessionId(sid);
-    setMessages([]); setTrace([]); setError(null);
-    refreshThreads();
-  };
-
-  const selectThread = async (id: string) => {
-    setSessionId(id);
-    setTrace([]); setError(null);
-    setMessages(toChat(await getSessionMessages(id)));
-  };
+  const decide = async (d: 'allow' | 'deny') => { const a = approval; setApproval(null); if (a) await postApproval(a.approval_id, d); };
+  const newThread = () => { setSessionId(null); setMessages([]); setTrace([]); setChanges([]); setError(null); };
+  const selectThread = async (id: string) => { setSessionId(id); setTrace([]); setChanges([]); setError(null); setMessages(toChat(await getSessionMessages(id))); };
+  const keepChange = (path: string) => setChanges((p) => p.filter((c) => c.path !== path));
+  const revertChange = async (ch: FileChange) => { if (sessionId) await revertFile(sessionId, ch.path, ch.old); keepChange(ch.path); };
 
   return (
-    <div className="flex h-screen w-full bg-[#FAFAFC] font-sans overflow-hidden text-gray-900 selection:bg-gray-200">
-      {/* THREADS SIDEBAR */}
-      <aside className="w-[260px] shrink-0 bg-[#F4F4F5] border-r border-gray-200/60 flex flex-col hidden md:flex z-10">
-        <div className="h-14 flex items-center px-5 shrink-0 border-b border-gray-200/50">
-          <div className="flex items-center gap-2.5">
-            <div className="w-6 h-6 bg-gray-900 text-white rounded flex items-center justify-center shadow-sm">
-              <Box className="w-3.5 h-3.5" strokeWidth={2.5} />
-            </div>
-            <span className="font-semibold tracking-tight text-[14px]">Agent Y</span>
+    <div className="flex h-screen w-full overflow-hidden" style={{ color: 'var(--color-ink)' }}>
+      {/* SIDEBAR */}
+      <aside className="w-[258px] shrink-0 hidden md:flex flex-col" style={{ background: 'var(--color-panel)', borderRight: '1px solid var(--color-line)' }}>
+        <div className="h-16 flex items-center px-5 gap-3">
+          <AgentOrb running={running} size={18} />
+          <span className="font-serif text-[22px] leading-none tracking-tight">{agentName}</span>
+        </div>
+
+        <div className="px-4">
+          <button onClick={newThread} className="btn btn-outline w-full justify-start"><Plus className="w-4 h-4" style={{ color: 'var(--color-gold)' }} /> 新对话</button>
+          <div className="flex gap-1 mt-3 p-1 rounded-xl" style={{ background: 'var(--color-bg)' }}>
+            {([['assistant', '助手', Briefcase], ['coding', '编码', Code2]] as const).map(([s, label, Icon]) => (
+              <button key={s} onClick={() => setScene(s)} className="flex-1 btn text-[12.5px] py-1.5"
+                style={scene === s ? { background: 'var(--color-elevated)', color: 'var(--color-ink)' } : { color: 'var(--color-ink-3)' }}>
+                <Icon className="w-3.5 h-3.5" /> {label}
+              </button>
+            ))}
           </div>
         </div>
-        <div className="p-4">
-          <button onClick={newThread} className="w-full flex items-center gap-2 px-3 py-2 text-[13px] font-medium text-gray-700 bg-white border border-gray-200/80 rounded shadow-[0_1px_2px_rgb(0,0,0,0.02)] hover:shadow-sm hover:border-gray-300 transition-all">
-            <Plus className="w-4 h-4 text-gray-400" /> New Thread
-          </button>
+
+        <div className="flex-1 overflow-y-auto px-3 mt-5 no-scrollbar">
+          <div className="label px-2 mb-2">最近</div>
+          {threads.length === 0 && <div className="px-2 text-[12.5px]" style={{ color: 'var(--color-ink-3)' }}>还没有对话。</div>}
+          {threads.map((th) => {
+            const on = th.id === sessionId;
+            return (
+              <button key={th.id} onClick={() => selectThread(th.id)}
+                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors mb-0.5"
+                style={on ? { background: 'var(--color-elevated)', boxShadow: 'inset 2px 0 0 var(--color-gold)' } : {}}>
+                <MessageSquare className="w-3.5 h-3.5 shrink-0" style={{ color: on ? 'var(--color-gold)' : 'var(--color-ink-3)' }} />
+                <span className="text-[13px] truncate" style={{ color: on ? 'var(--color-ink)' : 'var(--color-ink-2)' }}>{th.title}</span>
+              </button>
+            );
+          })}
         </div>
-        <div className="flex-1 overflow-y-auto px-4 py-2 no-scrollbar">
-          <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-3 px-2">Threads</div>
-          <div className="space-y-0.5">
-            {threads.length === 0 && <div className="px-3 text-[12px] text-gray-400">还没有会话，发一条消息开始。</div>}
-            {threads.map((th) => {
-              const active = th.id === sessionId;
-              return (
-                <button key={th.id} onClick={() => selectThread(th.id)}
-                  className={`w-full flex items-center text-left px-3 py-2 rounded-md transition-colors ${active ? 'bg-white shadow-[0_1px_3px_rgb(0,0,0,0.04)] border border-gray-200/60' : 'border border-transparent hover:bg-gray-200/40'}`}>
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <MessageSquare className={`w-3.5 h-3.5 shrink-0 ${active ? 'text-gray-900' : 'text-gray-400'}`} />
-                    <span className={`text-[13px] truncate ${active ? 'font-medium text-gray-900' : 'text-gray-600'}`}>{th.title}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <div className="p-4 border-t border-gray-200/50">
-          <button className="w-full flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-200/40 rounded transition-colors border border-transparent">
-            <Settings className="w-4 h-4 text-gray-400" /> Settings
+
+        <div className="p-3 space-y-0.5" style={{ borderTop: '1px solid var(--color-line)' }}>
+          <button onClick={() => setShowAutos(true)} className="btn btn-ghost w-full justify-start">
+            <Clock className="w-4 h-4" /> 自动化
+            {pendingReviews > 0 && <span className="ml-auto px-1.5 rounded-full text-[10px] font-semibold" style={{ background: 'var(--color-gold)', color: '#fff7f1' }}>{pendingReviews}</span>}
           </button>
+          <button onClick={() => setShowSettings(true)} className="btn btn-ghost w-full justify-start"><SettingsIcon className="w-4 h-4" /> 设置</button>
         </div>
       </aside>
 
-      {/* MAIN + TRACE */}
-      <main className="flex-1 flex flex-col min-w-0 bg-white">
-        <header className="h-14 flex items-center justify-between px-6 border-b border-gray-200/60 shrink-0 bg-white z-10">
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-gray-200 bg-gray-50/50 shadow-sm">
-              <Sparkles className="w-3.5 h-3.5 text-gray-600" />
-              <span className="text-[13px] font-medium text-gray-700">模型由后端配置</span>
-              <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
-            </div>
-            <div className="hidden lg:flex items-center gap-2 text-[13px] text-gray-400 font-medium tracking-wide">
-              <span>{sessionId ? sessionId.slice(0, 12) : 'new'}</span>
-              <ChevronRight className="w-3 h-3 text-gray-300" />
-              <span className="text-gray-600">{running ? 'running' : 'idle'}</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="flex bg-gray-100/80 p-0.5 rounded-md border border-gray-200/50">
-              <button onClick={() => setScene('coding')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] font-medium transition-all ${scene === 'coding' ? 'bg-white text-gray-900 shadow-[0_1px_2px_rgb(0,0,0,0.06)]' : 'text-gray-500 hover:text-gray-700'}`}>
-                <Code2 className="w-3.5 h-3.5" /> Code
-              </button>
-              <button onClick={() => setScene('assistant')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] font-medium transition-all ${scene === 'assistant' ? 'bg-white text-gray-900 shadow-[0_1px_2px_rgb(0,0,0,0.06)]' : 'text-gray-500 hover:text-gray-700'}`}>
-                <Briefcase className="w-3.5 h-3.5" /> Assist
-              </button>
-            </div>
+      {/* MAIN */}
+      <main className="flex-1 flex flex-col min-w-0">
+        <header className="h-16 flex items-center justify-between px-6 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
+          <button onClick={() => setShowSettings(true)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13px]"
+            style={{ background: 'var(--color-panel)', border: '1px solid var(--color-line)' }}>
+            <KeyRound className="w-3.5 h-3.5" style={{ color: active ? 'var(--color-gold)' : 'var(--color-danger)' }} />
+            <span style={{ color: 'var(--color-ink-2)' }}>{active ? (active.model_default || active.provider) : '未配置模型'}</span>
+          </button>
+          <div className="flex items-center gap-2">
+            <StatusDot running={running} />
+            <span className="text-[12px]" style={{ color: 'var(--color-ink-3)' }}>{running ? '思考中…' : '在线'}</span>
           </div>
         </header>
 
         <div className="flex flex-1 overflow-hidden">
-          {/* CHAT */}
-          <div className="flex flex-1 flex-col relative min-w-0">
-            <div ref={scrollRef} className="flex-1 overflow-y-auto w-full pt-10 pb-40 px-6 no-scrollbar">
-              <div className="max-w-3xl mx-auto w-full">
+          <div className="flex-1 flex flex-col min-w-0 relative">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 pt-10 pb-44 no-scrollbar">
+              <div className="max-w-2xl mx-auto w-full">
                 {messages.length === 0 && (
-                  <div className="text-center text-gray-400 text-[14px] mt-20">输入一个编码任务，Agent Y 会在沙箱里读/改/跑测试。</div>
-                )}
-                {messages.map((msg) => (
-                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} key={msg.id}
-                    className={`flex gap-5 mb-10 group ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    {msg.role === 'assistant' && (
-                      <div className="shrink-0 pt-0.5 select-none">
-                        <div className="w-7 h-7 rounded border border-gray-200 bg-gray-50 flex items-center justify-center text-gray-600 shadow-[0_1px_2px_rgb(0,0,0,0.02)]"><Box className="w-4 h-4" /></div>
-                      </div>
+                  <div className="mt-20 flex flex-col items-center text-center rise">
+                    <AgentOrb running={running} size={54} />
+                    <div className="font-serif text-[40px] leading-tight mt-7 mb-2">{greet()}</div>
+                    <p className="text-[14px] max-w-sm" style={{ color: 'var(--color-ink-3)' }}>
+                      {conns.length === 0
+                        ? '我是你的私人 AI 助手。先配一个模型连接，我们就能开始。'
+                        : scene === 'assistant' ? '问我点什么，或让我帮你整理文件、起草、做表格。' : '给我一个编码任务，我会读 / 改 / 跑测试。'}
+                    </p>
+                    {conns.length === 0 && (
+                      <button onClick={() => setShowSettings(true)} className="btn btn-gold mt-6"><KeyRound className="w-4 h-4" /> 配置模型连接</button>
                     )}
-                    <div className={`max-w-[85%] ${msg.role === 'user' ? 'bg-gray-100 rounded-[18px] rounded-tr-sm px-5 py-3.5 border border-gray-200/50 shadow-sm' : 'pt-0.5'}`}>
-                      {msg.role === 'assistant' && <div className="font-semibold text-gray-900 text-sm mb-1.5 tracking-wide">Agent Y</div>}
-                      <div className={`text-[14px] leading-relaxed whitespace-pre-wrap ${msg.role === 'user' ? 'text-gray-800' : 'text-gray-700'} tracking-wide`}>{msg.content}</div>
-                    </div>
-                  </motion.div>
+                  </div>
+                )}
+                {messages.map((m) => (
+                  <div key={m.id} className={`rise mb-8 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    {m.role === 'user'
+                      ? <div className="max-w-[82%] px-4 py-2.5 rounded-2xl rounded-tr-md text-[14px] leading-relaxed" style={{ background: 'var(--color-elevated)', border: '1px solid var(--color-line)' }}>{m.content}</div>
+                      : <div className="max-w-[88%]">
+                          <div className="text-[12px] font-medium mb-1.5 tracking-wide" style={{ color: 'var(--color-gold)' }}>{agentName}</div>
+                          <div className="text-[14.5px] leading-[1.75] whitespace-pre-wrap" style={{ color: 'var(--color-ink)' }}>{m.content}</div>
+                        </div>}
+                  </div>
                 ))}
-                <AnimatePresence>
-                  {running && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex gap-5 mb-10 justify-start">
-                      <div className="shrink-0 pt-0.5 opacity-50"><div className="w-7 h-7 rounded border border-gray-200 bg-gray-50 flex items-center justify-center text-gray-600 shadow-sm"><Box className="w-4 h-4" /></div></div>
-                      <div className="pt-1.5 flex gap-1.5 items-center">
-                        {[0, 0.2, 0.4].map((d) => (
-                          <motion.div key={d} animate={{ opacity: [0.3, 1, 0.3] }} transition={{ repeat: Infinity, duration: 1.5, delay: d }} className="w-1.5 h-1.5 rounded-full bg-gray-500" />
-                        ))}
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-                {error && <div className="text-[13px] text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-2 mb-6">⚠️ {error}</div>}
+                {running && !messages.some((m) => m.id === streamId.current) && (
+                  <div className="flex gap-1.5 items-center mb-8">
+                    {[0, 0.2, 0.4].map((d) => <span key={d} className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-gold)', animation: `blink 1.4s ${d}s infinite` }} />)}
+                  </div>
+                )}
+                {error && <div className="text-[13px] rounded-xl px-4 py-2.5 mb-6" style={{ color: 'var(--color-danger)', background: 'rgba(224,121,106,0.1)', border: '1px solid rgba(224,121,106,0.25)' }}>{error}</div>}
+                {changes.length > 0 && (
+                  <div className="mt-1 mb-8">
+                    <div className="label mb-2.5">本次改动 · {changes.length} 个文件</div>
+                    {changes.map((ch) => (
+                      <div key={ch.path}><DiffCard ch={ch} onKeep={() => keepChange(ch.path)} onRevert={() => revertChange(ch)} /></div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
             {/* INPUT */}
-            <div className="absolute bottom-0 w-full bg-gradient-to-t from-white via-white/95 to-transparent pt-12 pb-6 px-6 z-10 pointer-events-none">
-              <div className="max-w-3xl mx-auto relative pointer-events-auto shadow-sm">
-                <div className="bg-white border border-gray-200/80 shadow-[0_8px_30px_rgb(0,0,0,0.04)] rounded-[16px] p-1.5 flex items-end focus-within:border-gray-300 relative overflow-hidden">
-                  <div className="absolute top-0 left-0 w-1 h-full bg-gray-900 rounded-l-[16px]" />
-                  <div className="p-3 pl-4"><Terminal className="w-[18px] h-[18px] text-gray-400" /></div>
-                  <textarea value={inputValue} onChange={(e) => setInputValue(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleRun(); } }}
-                    className="flex-1 max-h-48 bg-transparent py-3 px-1 outline-none resize-none text-[14px] text-gray-800 placeholder-gray-400 tracking-wide"
-                    rows={1} placeholder={scene === 'coding' ? '让 agent 改代码 / 修测试…' : '问问你的助手…'} disabled={running} />
-                  <button onClick={handleRun} disabled={running}
-                    className={`p-2.5 m-1 rounded-[10px] transition-all shrink-0 flex items-center justify-center ${!running ? 'bg-gray-900 text-white hover:bg-gray-800 shadow-[0_2px_4px_rgb(0,0,0,0.1)]' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}>
-                    <Play className="w-[14px] h-[14px] fill-current" />
-                  </button>
+            <div className="absolute bottom-0 inset-x-0 px-6 pb-6 pt-12 pointer-events-none" style={{ background: 'linear-gradient(to top, var(--color-bg) 55%, transparent)' }}>
+              <div className="max-w-2xl mx-auto pointer-events-auto">
+                {scene === 'assistant' && (
+                  <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                    {folders.map((f) => (
+                      <span key={f.id} className="inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-full text-[11.5px]"
+                        style={{ background: 'var(--color-panel)', border: '1px solid var(--color-line)', color: 'var(--color-ink-2)' }}>
+                        <span className="font-mono truncate max-w-[170px]" title={f.path}>{f.path.split('/').filter(Boolean).pop() || f.path}</span>
+                        <button onClick={() => removeFolder(f.id)} className="opacity-45 hover:opacity-100"><X className="w-3 h-3" /></button>
+                      </span>
+                    ))}
+                    <button onClick={pickFolder} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11.5px] transition-colors"
+                      style={{ border: '1px dashed var(--color-line-2)', color: 'var(--color-ink-3)' }}>
+                      <FolderPlus className="w-3.5 h-3.5" /> {folders.length ? '加文件夹' : '选择文件夹读取'}
+                    </button>
+                  </div>
+                )}
+                <div className="flex items-end gap-2 p-2 rounded-2xl" style={{ background: 'var(--color-panel)', border: '1px solid var(--color-line-2)' }}>
+                  <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={1} disabled={running}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); run(); } }}
+                    placeholder={scene === 'assistant' ? '问问你的助手…' : '让我改代码 / 修测试…'}
+                    className="flex-1 bg-transparent outline-none resize-none px-3 py-2.5 text-[14px] max-h-44" style={{ color: 'var(--color-ink)' }} />
+                  <button onClick={run} disabled={running || !input.trim()} className="btn btn-gold w-10 h-10 p-0 shrink-0"><ArrowUp className="w-[18px] h-[18px]" /></button>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* TRACE PANEL */}
+          {/* TRACE */}
           {scene === 'coding' && (
-            <aside className="w-[360px] shrink-0 border-l border-gray-200/60 bg-[#FAFAFC] flex flex-col hidden lg:flex">
-              <div className="h-12 border-b border-gray-200/60 flex items-center px-5 shrink-0 bg-white">
-                <h3 className="text-[11px] font-semibold text-gray-500 uppercase tracking-widest flex items-center gap-2"><Database className="w-3.5 h-3.5" /> Execution Trace</h3>
+            <aside className="w-[340px] shrink-0 hidden lg:flex flex-col" style={{ background: 'var(--color-panel)', borderLeft: '1px solid var(--color-line)' }}>
+              <div className="h-12 flex items-center px-5" style={{ borderBottom: '1px solid var(--color-line)' }}>
+                <span className="label flex items-center gap-2"><Activity className="w-3.5 h-3.5" /> 执行轨迹</span>
               </div>
-              <div className="flex-1 overflow-y-auto p-6 relative no-scrollbar">
-                {trace.length === 0 && <div className="text-[12px] text-gray-400">工具调用会实时出现在这里。</div>}
-                {trace.length > 0 && <div className="absolute left-[34px] top-8 bottom-8 w-[1px] bg-gray-200" />}
-                <div className="space-y-6 relative">
-                  {trace.map((step) => (
-                    <motion.div layout key={step.id} initial={{ opacity: 0, x: 6 }} animate={{ opacity: 1, x: 0 }} className="flex items-start gap-4 z-10 relative">
-                      <div className="mt-0.5 bg-[#FAFAFC]">
-                        {step.status === 'done' ? (
-                          <div className="w-[18px] h-[18px] rounded-full border border-gray-300 flex items-center justify-center bg-white shadow-sm"><Check className="w-2.5 h-2.5 text-gray-700" strokeWidth={3} /></div>
-                        ) : step.status === 'error' ? (
-                          <div className="w-[18px] h-[18px] rounded-full border border-red-300 flex items-center justify-center bg-red-50"><X className="w-2.5 h-2.5 text-red-600" strokeWidth={3} /></div>
-                        ) : (
-                          <div className="w-[18px] h-[18px] flex items-center justify-center"><div className="w-2 h-2 rounded-full bg-gray-900 animate-pulse" /></div>
-                        )}
+              <div className="flex-1 overflow-y-auto p-5 no-scrollbar">
+                {trace.length === 0 && <div className="text-[12.5px]" style={{ color: 'var(--color-ink-3)' }}>工具调用会实时出现在这里。</div>}
+                <div className="space-y-4">
+                  {trace.map((s) => (
+                    <div key={s.id} className="flex items-start gap-3 rise">
+                      <div className="mt-0.5">
+                        {s.status === 'done' ? <Check className="w-3.5 h-3.5" style={{ color: 'var(--color-ok)' }} strokeWidth={3} />
+                          : s.status === 'error' ? <X className="w-3.5 h-3.5" style={{ color: 'var(--color-danger)' }} strokeWidth={3} />
+                          : <span className="block w-2 h-2 rounded-full mt-1" style={{ background: 'var(--color-gold)', animation: 'blink 1.2s infinite' }} />}
                       </div>
-                      <div className="flex-1 min-w-0 font-mono text-[13px] pt-px">
-                        <div className={`${step.status === 'running' ? 'text-gray-900 font-semibold' : step.status === 'error' ? 'text-red-700' : 'text-gray-700'} truncate`}>{step.label}</div>
-                        {step.target && <div className="text-[11px] text-gray-500 mt-0.5 truncate pr-2">{step.target}</div>}
+                      <div className="min-w-0 font-mono text-[12.5px]">
+                        <div style={{ color: s.status === 'error' ? 'var(--color-danger)' : 'var(--color-ink)' }}>{s.label}</div>
+                        {s.target && <div className="text-[11px] truncate mt-0.5" style={{ color: 'var(--color-ink-3)' }}>{s.target}</div>}
                       </div>
-                    </motion.div>
+                    </div>
                   ))}
                 </div>
               </div>
-              <div className="p-5 border-t border-gray-200/60 bg-white shrink-0 z-10">
-                <div className="flex items-center justify-between font-mono text-[12px] tracking-wide">
-                  <span className="text-gray-500">Eval pass@1</span>
-                  <span className="flex items-center gap-2 font-medium text-gray-800">62% <ArrowRight className="w-3.5 h-3.5 text-gray-400" /> <span className="text-gray-900 bg-gray-100 px-1.5 py-0.5 rounded">81%</span></span>
+            </aside>
+          )}
+
+          {/* 日常面板（助手场景）：今日天气 + 待办 */}
+          {scene === 'assistant' && (
+            <aside className="w-[300px] shrink-0 hidden lg:flex flex-col" style={{ background: 'var(--color-panel)', borderLeft: '1px solid var(--color-line)' }}>
+              <div className="h-12 flex items-center px-5" style={{ borderBottom: '1px solid var(--color-line)' }}>
+                <span className="label">今日</span>
+              </div>
+              <div className="flex-1 overflow-y-auto p-5 no-scrollbar space-y-6">
+                <div>
+                  <div className="label mb-2.5 flex items-center gap-2"><CloudSun className="w-3.5 h-3.5" /> 天气{weather?.ok && weather.label ? ` · ${weather.label}` : ''}</div>
+                  {weather?.ok ? (
+                    <div className="card p-3.5" style={{ background: 'var(--color-elevated)' }}>
+                      <div className="flex items-start gap-2">
+                        {weather.today && <Wx day={weather.today} label="今天" />}
+                        {weather.tomorrow && <><span style={{ width: 1, alignSelf: 'stretch', background: 'var(--color-line)' }} /><Wx day={weather.tomorrow} label="明天" /></>}
+                      </div>
+                      {weather.advice && (
+                        <div className="text-[12px] leading-relaxed mt-3 pt-3" style={{ color: 'var(--color-ink-2)', borderTop: '1px solid var(--color-line)' }}>{weather.advice}</div>
+                      )}
+                    </div>
+                  ) : (
+                    <button onClick={() => setShowSettings(true)} className="text-[12.5px] text-left leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>
+                      在设置里填写城市，这里就会显示今天 / 明天天气和出行建议 →
+                    </button>
+                  )}
+                </div>
+
+                <div>
+                  <div className="label mb-2.5">待办</div>
+                  <div className="flex items-center gap-1.5 mb-3">
+                    <input value={newTodo} onChange={(e) => setNewTodo(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') addNewTodo(); }}
+                      placeholder="加一项待办…" className="field py-2 text-[13px]" />
+                    <button onClick={addNewTodo} className="btn btn-gold w-9 h-9 p-0 shrink-0"><Plus className="w-4 h-4" /></button>
+                  </div>
+                  <div className="space-y-0.5">
+                    {todos.filter((t) => !t.done).length === 0 && <div className="text-[12.5px] px-1" style={{ color: 'var(--color-ink-3)' }}>没有待办，清爽。</div>}
+                    {todos.filter((t) => !t.done).map((t) => (
+                      <button key={t.id} onClick={() => toggleTodo(t)} className="w-full flex items-start gap-2 px-1.5 py-1.5 rounded-lg text-left transition-colors hover:bg-[rgba(43,42,39,0.04)]">
+                        <Square className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--color-ink-3)' }} />
+                        <span className="text-[13px]" style={{ color: 'var(--color-ink-2)' }}>{t.text}{t.due && <span className="ml-1.5 text-[11px]" style={{ color: 'var(--color-ink-3)' }}>· {t.due}</span>}</span>
+                      </button>
+                    ))}
+                    {todos.some((t) => t.done) && (
+                      <div className="pt-1.5 mt-1.5" style={{ borderTop: '1px solid var(--color-line)' }}>
+                        {todos.filter((t) => t.done).map((t) => (
+                          <button key={t.id} onClick={() => toggleTodo(t)} className="w-full flex items-start gap-2 px-1.5 py-1.5 rounded-lg text-left transition-colors hover:bg-[rgba(43,42,39,0.04)]">
+                            <CheckSquare className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--color-ok)' }} />
+                            <span className="text-[13px] line-through" style={{ color: 'var(--color-ink-3)' }}>{t.text}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </aside>
@@ -298,33 +453,40 @@ export default function App() {
         </div>
       </main>
 
-      {/* APPROVAL MODAL */}
+      {/* APPROVAL */}
       <AnimatePresence>
         {approval && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/20 backdrop-blur-sm px-4">
-            <motion.div initial={{ opacity: 0, scale: 0.97, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 10 }} transition={{ type: 'spring', bounce: 0, duration: 0.4 }}
-              className="w-full max-w-md bg-white border border-gray-200 rounded-[20px] shadow-2xl flex flex-col overflow-hidden">
-              <div className="p-5 border-b border-gray-100 flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 shrink-0"><AlertTriangle className="w-4 h-4" /></div>
-                <div className="font-semibold text-gray-900">需要确认</div>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[110] flex items-center justify-center px-4" style={{ background: 'rgba(43,42,39,0.42)' }}>
+            <motion.div initial={{ opacity: 0, scale: 0.97, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97 }}
+              className="card w-full max-w-md overflow-hidden" style={{ boxShadow: '0 30px 80px rgba(60,40,30,0.22)' }}>
+              <div className="flex items-center gap-3 px-5 h-14" style={{ borderBottom: '1px solid var(--color-line)' }}>
+                <AlertTriangle className="w-4 h-4" style={{ color: 'var(--color-gold)' }} />
+                <span className="font-medium">需要你确认</span>
               </div>
-              <div className="p-6 space-y-4">
-                <div className="bg-[#FAFAFC] border border-gray-200/80 p-3 rounded-xl shadow-sm">
-                  <div className="text-[10px] uppercase text-gray-400 tracking-wider mb-1 font-semibold">操作</div>
-                  <div className="text-gray-900 font-medium text-[14px]">{approval.summary || approval.tool}</div>
-                </div>
-                <div className="flex items-center gap-2 text-[13px]">
-                  <span className="text-gray-500">风险等级</span>
-                  <span className={`px-2 py-0.5 rounded font-medium ${approval.risk === 'high' ? 'bg-red-100 text-red-700' : approval.risk === 'medium' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>{approval.risk}</span>
+              <div className="p-5 space-y-3">
+                <div className="text-[14px]">{approval.summary || approval.tool}</div>
+                <div className="flex items-center gap-2 text-[12px]">
+                  <span style={{ color: 'var(--color-ink-3)' }}>风险</span>
+                  <span className="px-2 py-0.5 rounded font-medium" style={{
+                    color: approval.risk === 'high' ? 'var(--color-danger)' : 'var(--color-gold)',
+                    background: approval.risk === 'high' ? 'rgba(224,121,106,0.12)' : 'rgba(214,168,102,0.12)' }}>{approval.risk}</span>
                 </div>
               </div>
-              <div className="p-4 px-6 border-t border-gray-100 bg-[#FAFAFC] flex justify-end gap-3">
-                <button onClick={() => decide('deny')} className="px-5 py-2.5 rounded-[12px] font-medium text-gray-600 hover:bg-gray-200 transition-colors text-[13px]">拒绝</button>
-                <button onClick={() => decide('allow')} className="px-6 py-2.5 rounded-[12px] font-medium bg-gray-900 shadow-[0_2px_4px_rgb(0,0,0,0.1)] hover:bg-gray-800 text-white transition-all text-[13px]">允许本次</button>
+              <div className="flex justify-end gap-2 px-5 py-4" style={{ borderTop: '1px solid var(--color-line)' }}>
+                <button onClick={() => decide('deny')} className="btn btn-ghost">拒绝</button>
+                <button onClick={() => decide('allow')} className="btn btn-gold">允许本次</button>
               </div>
             </motion.div>
           </motion.div>
         )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showSettings && <SettingsPanel onClose={() => { setShowSettings(false); refreshConfig(); }} />}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showAutos && <AutomationsPanel onClose={() => { setShowAutos(false); refreshConfig(); }} />}
       </AnimatePresence>
     </div>
   );
