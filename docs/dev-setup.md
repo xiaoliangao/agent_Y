@@ -62,9 +62,19 @@ export AGENTY_BASE_URL=https://api.deepseek.com
 export AGENTY_MODEL=deepseek-chat
 export AGENTY_KEY_ENV=DEEPSEEK_API_KEY
 export DEEPSEEK_API_KEY=sk-...
+export AGENTY_APPROVAL=ask          # ask(默认,需前端点确认) | auto(自动放行写操作)
+pip install uvicorn                  # 若未装
 uvicorn server.app:app --host 127.0.0.1 --port 8765
 ```
 关键端点（详见 `design.md §4.1`）：`POST /sessions` · `POST /sessions/{id}/messages`（**SSE 流**：text_delta / tool_use / tool_result / approval_request / done）· `POST /approvals/{id}` · `GET /sessions` · `GET /health`。审批：写/危险操作发 `approval_request` 并暂停，前端 `POST /approvals/{id}` 恢复。
+> ✅ 已用真 uvicorn + DeepSeek 实测：SSE 增量推送、工具执行、done 均正常（前端 `agent-y/` 即按此对接）。
+
+### 前端（`agent-y/`，M2）
+```bash
+cd agent-y && npm install
+VITE_API_BASE=http://127.0.0.1:8765 npm run dev   # 打开 http://localhost:3000
+```
+左栏 chat、右栏实时执行轨迹、写操作弹审批框——全部由上面的后端 SSE 驱动。
 
 ## 6. Docker 沙箱说明（`core/sandbox/docker.py`）
 - **镜像**：默认 `python:3.12-slim`。首次用前建议手动拉一次：`docker pull python:3.12-slim`。

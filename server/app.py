@@ -206,4 +206,9 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
     return app
 
 
-app = create_app()  # 供 `uvicorn server.app:app` 使用
+def _env_approval() -> ApprovalMode:
+    return ApprovalMode.AUTO if os.environ.get("AGENTY_APPROVAL", "ask") == "auto" else ApprovalMode.ASK
+
+
+app = create_app(approval_mode=_env_approval())  # 供 `uvicorn server.app:app` 使用
+
