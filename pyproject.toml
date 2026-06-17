@@ -1,0 +1,38 @@
+[project]
+name = "agent-y"
+version = "0.1.0"
+description = "会编码、能自进化的个人桌面工作助手（Agent Y）"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.40",
+    "openai>=1.50",
+    "pydantic>=2.7",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
+    "keyring>=25",
+    "docker>=7.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4"]
+obs = ["langfuse>=2.0"]
+office = ["python-docx>=1.1", "python-pptx>=0.6", "openpyxl>=3.1"]
+
+[project.scripts]
+agenty = "cli.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["core*", "server*", "cli*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
