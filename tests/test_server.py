@@ -171,3 +171,16 @@ async def test_assistant_scenario_selected(tmp_path):
     eng = _build_engine(app, sid)
     names = {t.name for t in eng.tools}
     assert "read_dir" in names and "xlsx_write" in names
+
+
+async def test_serves_frontend_when_present(tmp_path):
+    fe = tmp_path / "fe"
+    fe.mkdir()
+    (fe / "index.html").write_text("<h1>Agent Y</h1>")
+    app = create_app(
+        provider=MockProvider([]), db_path=str(tmp_path / "db"),
+        data_dir=str(tmp_path / "d"), frontend_dir=str(fe),
+    )
+    async with _client(app) as client:
+        assert "Agent Y" in (await client.get("/")).text  # 前端首页
+        assert (await client.get("/health")).json()["ok"] is True  # API 仍工作

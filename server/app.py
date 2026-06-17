@@ -183,9 +183,18 @@ async def _event_stream(app: FastAPI, sid: str, engine: SessionEngine, text: str
         st.store.set_status(sid, "idle")
 
 
+def _default_frontend() -> str:
+    import sys
+
+    if getattr(sys, "frozen", False):  # PyInstaller 打包后：dist 随包(sys._MEIPASS/frontend)
+        return os.path.join(sys._MEIPASS, "frontend")  # type: ignore[attr-defined]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(root, "agent-y", "dist")
+
+
 def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: str | None = None,
                model: str | None = None, approval_mode: ApprovalMode = ApprovalMode.ASK,
-               memory: bool | None = None) -> FastAPI:
+               memory: bool | None = None, frontend_dir: str | None = None) -> FastAPI:
     app = FastAPI(title="Agent Y", version="0.1.0")
     # 本地单用户：放开 CORS，便于前端 dev server(另一端口) 直连。生产同源(pywebview)时无所谓。
     app.add_middleware(
@@ -307,6 +316,14 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
         if not request.app.state.scheduler.delete_reminder(rid):
             raise HTTPException(404, "reminder_not_found")
         return {"ok": True}
+
+    # 末尾挂载前端静态产物（若存在）：打包后桌面窗口直接 http://127.0.0.1:port/ 同源访问。
+    # 必须在所有 API 路由之后挂载，"/" 兜底不抢 API。
+    frontend = frontend_dir or os.environ.get("AGENTY_FRONTEND") or _default_frontend()
+    if frontend and os.path.isdir(frontend):
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount("/", StaticFiles(directory=frontend, html=True), name="frontend")
 
     return app
 
