@@ -1,16 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  Plus, Settings as SettingsIcon, Code2, Briefcase, ArrowUp, Check, X,
-  AlertTriangle, Activity, MessageSquare, KeyRound, Clock,
-  CloudSun, FolderPlus, CheckSquare, Square,
+  Plus, Settings as SettingsIcon, Code2, Briefcase, ArrowUp, X,
+  AlertTriangle, MessageSquare, KeyRound, Clock,
+  CloudSun, FolderPlus, CheckSquare, Square, FileCode2, Terminal,
 } from 'lucide-react';
 import {
   createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile,
   listProviders, getSettings, listReviews,
   listTodos, addTodo, patchTodo, listFolders, addFolder, deleteFolder,
   getWeather, hasNativeFolderPick, pickFolderNative,
-  type Frame, type SessionSummary, type Connection, type Todo, type Folder, type Weather, type WeatherDay,
+  listWorkspaceFiles, readWorkspaceFile,
+  type Frame, type SessionSummary, type Connection, type Todo, type Folder,
+  type Weather, type WeatherDay, type WorkspaceFile,
 } from './api';
 import SettingsPanel from './Settings';
 import AutomationsPanel from './Automations';
@@ -138,6 +140,24 @@ function Wx({ day, label }: { day: WeatherDay; label: string }) {
   );
 }
 
+// 编码 IDE 中央：只读代码查看（行号槽，编辑器感）
+function CodeView({ content }: { content?: string }) {
+  if (content === undefined) return <div className="p-5 text-[12.5px]" style={{ color: 'var(--color-ink-3)' }}>加载中…</div>;
+  const lines = content.split('\n');
+  return (
+    <div className="h-full overflow-auto no-scrollbar" style={{ background: 'var(--color-panel)' }}>
+      <pre className="text-[12px] font-mono leading-[1.6] py-2">
+        {lines.map((line, i) => (
+          <div key={i} className="flex">
+            <span className="select-none text-right shrink-0" style={{ width: 44, paddingRight: 12, color: 'var(--color-ink-3)', opacity: 0.5 }}>{i + 1}</span>
+            <span style={{ whiteSpace: 'pre', color: 'var(--color-ink)', paddingRight: 14 }}>{line || ' '}</span>
+          </div>
+        ))}
+      </pre>
+    </div>
+  );
+}
+
 export default function App() {
   const [scene, setScene] = useState<'coding' | 'assistant'>('assistant');
   const [threads, setThreads] = useState<SessionSummary[]>([]);
@@ -158,6 +178,10 @@ export default function App() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [newTodo, setNewTodo] = useState('');
+  const [files, setFiles] = useState<WorkspaceFile[]>([]);     // 编码场景工作区文件树
+  const [openTabs, setOpenTabs] = useState<string[]>([]);      // 编辑器打开的文件
+  const [activeTab, setActiveTab] = useState<string | null>(null);
+  const [fileCache, setFileCache] = useState<Record<string, string>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamId = useRef<string | null>(null);
 
@@ -173,8 +197,9 @@ export default function App() {
     listFolders().then(setFolders).catch(() => {});
     getWeather().then(setWeather).catch(() => {});
   };
+  const refreshFiles = (sid: string | null) => { if (sid) listWorkspaceFiles(sid).then(setFiles).catch(() => {}); else setFiles([]); };
   useEffect(() => { refreshThreads(); refreshConfig(); refreshDaily(); }, []);
-  useEffect(() => { if (scene === 'assistant') refreshDaily(); }, [scene]);
+  useEffect(() => { if (scene === 'assistant') refreshDaily(); else refreshFiles(sessionId); }, [scene, sessionId]);
 
   const addNewTodo = async () => {
     const t = newTodo.trim();
@@ -191,6 +216,19 @@ export default function App() {
     if (path && path.trim()) { await addFolder(path.trim()).catch(() => {}); refreshDaily(); }
   };
   const removeFolder = async (id: string) => { await deleteFolder(id).catch(() => {}); refreshDaily(); };
+  const openFile = async (path: string) => {
+    setOpenTabs((p) => (p.includes(path) ? p : [...p, path]));
+    setActiveTab(path);
+    if (sessionId && !(path in fileCache)) {
+      const r = await readWorkspaceFile(sessionId, path);
+      setFileCache((c) => ({ ...c, [path]: r.content }));
+    }
+  };
+  const closeTab = (path: string) => {
+    const rest = openTabs.filter((x) => x !== path);
+    setOpenTabs(rest);
+    if (activeTab === path) setActiveTab(rest[rest.length - 1] ?? null);
+  };
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [messages, trace, running]);
 
   const active = conns.find((c) => c.active);
@@ -206,7 +244,11 @@ export default function App() {
     } else if (fr.type === 'tool_result') {
       setTrace((p) => p.map((s) => (s.id === fr.id ? { ...s, status: fr.is_error ? 'error' : 'done' } : s)));
     } else if (fr.type === 'approval_request') setApproval(fr);
-    else if (fr.type === 'file_change') setChanges((p) => [...p.filter((c) => c.path !== fr.path), fr]);
+    else if (fr.type === 'file_change') {
+      setChanges((p) => [...p.filter((c) => c.path !== fr.path), fr]);
+      setOpenTabs((p) => (p.includes(fr.path) ? p : [...p, fr.path]));  // 改动文件自动在编辑器开标签
+      setActiveTab(fr.path);
+    }
     else if (fr.type === 'done') streamId.current = null;
     else if (fr.type === 'error') setError(fr.message);
   };
@@ -222,15 +264,92 @@ export default function App() {
       if (!sid) { sid = await createSession(text.slice(0, 40), scene); setSessionId(sid); }
       for await (const fr of streamMessage(sid, text)) onFrame(fr);
       refreshThreads();
+      refreshFiles(sid);  // 跑完刷新工作区文件树
     } catch (e) { setError(String(e)); }
     finally { setRunning(false); setApproval(null); }
   };
 
   const decide = async (d: 'allow' | 'deny') => { const a = approval; setApproval(null); if (a) await postApproval(a.approval_id, d); };
-  const newThread = () => { setSessionId(null); setMessages([]); setTrace([]); setChanges([]); setError(null); };
-  const selectThread = async (id: string) => { setSessionId(id); setTrace([]); setChanges([]); setError(null); setMessages(toChat(await getSessionMessages(id))); };
-  const keepChange = (path: string) => setChanges((p) => p.filter((c) => c.path !== path));
-  const revertChange = async (ch: FileChange) => { if (sessionId) await revertFile(sessionId, ch.path, ch.old); keepChange(ch.path); };
+  const resetWorkspace = () => { setTrace([]); setChanges([]); setError(null); setOpenTabs([]); setActiveTab(null); setFileCache({}); };
+  const newThread = () => { setSessionId(null); setMessages([]); resetWorkspace(); setFiles([]); };
+  const selectThread = async (id: string) => { setSessionId(id); resetWorkspace(); setMessages(toChat(await getSessionMessages(id))); refreshFiles(id); };
+  const keepChange = (path: string) => {
+    setChanges((p) => p.filter((c) => c.path !== path));
+    if (sessionId) readWorkspaceFile(sessionId, path).then((r) => setFileCache((c) => ({ ...c, [path]: r.content })));
+  };
+  const revertChange = async (ch: FileChange) => {
+    if (sessionId) await revertFile(sessionId, ch.path, ch.old);
+    setChanges((p) => p.filter((c) => c.path !== ch.path));
+    setFileCache((c) => ({ ...c, [ch.path]: ch.old }));
+  };
+
+  // 对话消息流（助手宽版 / 编码窄版共用）
+  const renderMessages = (narrow: boolean) => (
+    <>
+      {messages.length === 0 && (narrow ? (
+        <div className="text-[13px] leading-relaxed mt-6 text-center px-2" style={{ color: 'var(--color-ink-3)' }}>
+          给我一个编码任务，我会读 / 改 / 跑测试，改动会在左侧编辑器里高亮成 diff。
+        </div>
+      ) : (
+        <div className="mt-20 flex flex-col items-center text-center rise">
+          <AgentOrb running={running} size={54} />
+          <div className="font-serif text-[40px] leading-tight mt-7 mb-2">{greet()}</div>
+          <p className="text-[14px] max-w-sm" style={{ color: 'var(--color-ink-3)' }}>
+            {conns.length === 0
+              ? '我是你的私人 AI 助手。先配一个模型连接，我们就能开始。'
+              : '问我点什么，或让我帮你整理文件、起草、做表格。'}
+          </p>
+          {conns.length === 0 && (
+            <button onClick={() => setShowSettings(true)} className="btn btn-gold mt-6"><KeyRound className="w-4 h-4" /> 配置模型连接</button>
+          )}
+        </div>
+      ))}
+      {messages.map((m) => (
+        <div key={m.id} className={`rise mb-6 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+          {m.role === 'user'
+            ? <div className="max-w-[85%] px-4 py-2.5 rounded-2xl rounded-tr-md text-[14px] leading-relaxed" style={{ background: 'var(--color-elevated)', border: '1px solid var(--color-line)' }}>{m.content}</div>
+            : <div className="max-w-[92%]">
+                <div className="text-[12px] font-medium mb-1.5 tracking-wide" style={{ color: 'var(--color-gold)' }}>{agentName}</div>
+                <div className="text-[14px] leading-[1.7] whitespace-pre-wrap" style={{ color: 'var(--color-ink)' }}>{m.content}</div>
+              </div>}
+        </div>
+      ))}
+      {running && !messages.some((m) => m.id === streamId.current) && (
+        <div className="flex gap-1.5 items-center mb-6">
+          {[0, 0.2, 0.4].map((d) => <span key={d} className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-gold)', animation: `blink 1.4s ${d}s infinite` }} />)}
+        </div>
+      )}
+      {error && <div className="text-[13px] rounded-xl px-4 py-2.5 mb-6" style={{ color: 'var(--color-danger)', background: 'rgba(224,121,106,0.1)', border: '1px solid rgba(224,121,106,0.25)' }}>{error}</div>}
+    </>
+  );
+
+  // 输入区（showFolders：助手场景才显示选文件夹）
+  const composer = (showFolders: boolean) => (
+    <>
+      {showFolders && (
+        <div className="flex flex-wrap items-center gap-1.5 mb-2">
+          {folders.map((f) => (
+            <span key={f.id} className="inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-full text-[11.5px]"
+              style={{ background: 'var(--color-panel)', border: '1px solid var(--color-line)', color: 'var(--color-ink-2)' }}>
+              <span className="font-mono truncate max-w-[170px]" title={f.path}>{f.path.split('/').filter(Boolean).pop() || f.path}</span>
+              <button onClick={() => removeFolder(f.id)} className="opacity-45 hover:opacity-100"><X className="w-3 h-3" /></button>
+            </span>
+          ))}
+          <button onClick={pickFolder} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11.5px] transition-colors"
+            style={{ border: '1px dashed var(--color-line-2)', color: 'var(--color-ink-3)' }}>
+            <FolderPlus className="w-3.5 h-3.5" /> {folders.length ? '加文件夹' : '选择文件夹读取'}
+          </button>
+        </div>
+      )}
+      <div className="flex items-end gap-2 p-2 rounded-2xl" style={{ background: 'var(--color-panel)', border: '1px solid var(--color-line-2)' }}>
+        <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={1} disabled={running}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); run(); } }}
+          placeholder={scene === 'assistant' ? '问问你的助手…' : '让我改代码 / 修测试…'}
+          className="flex-1 bg-transparent outline-none resize-none px-3 py-2.5 text-[14px] max-h-44" style={{ color: 'var(--color-ink)' }} />
+        <button onClick={run} disabled={running || !input.trim()} className="btn btn-gold w-10 h-10 p-0 shrink-0"><ArrowUp className="w-[18px] h-[18px]" /></button>
+      </div>
+    </>
+  );
 
   return (
     <div className="flex h-screen w-full overflow-hidden" style={{ color: 'var(--color-ink)' }}>
@@ -293,162 +412,172 @@ export default function App() {
         </header>
 
         <div className="flex flex-1 overflow-hidden">
-          <div className="flex-1 flex flex-col min-w-0 relative">
-            <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 pt-10 pb-44 no-scrollbar">
-              <div className="max-w-2xl mx-auto w-full">
-                {messages.length === 0 && (
-                  <div className="mt-20 flex flex-col items-center text-center rise">
-                    <AgentOrb running={running} size={54} />
-                    <div className="font-serif text-[40px] leading-tight mt-7 mb-2">{greet()}</div>
-                    <p className="text-[14px] max-w-sm" style={{ color: 'var(--color-ink-3)' }}>
-                      {conns.length === 0
-                        ? '我是你的私人 AI 助手。先配一个模型连接，我们就能开始。'
-                        : scene === 'assistant' ? '问我点什么，或让我帮你整理文件、起草、做表格。' : '给我一个编码任务，我会读 / 改 / 跑测试。'}
-                    </p>
-                    {conns.length === 0 && (
-                      <button onClick={() => setShowSettings(true)} className="btn btn-gold mt-6"><KeyRound className="w-4 h-4" /> 配置模型连接</button>
-                    )}
-                  </div>
-                )}
-                {messages.map((m) => (
-                  <div key={m.id} className={`rise mb-8 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    {m.role === 'user'
-                      ? <div className="max-w-[82%] px-4 py-2.5 rounded-2xl rounded-tr-md text-[14px] leading-relaxed" style={{ background: 'var(--color-elevated)', border: '1px solid var(--color-line)' }}>{m.content}</div>
-                      : <div className="max-w-[88%]">
-                          <div className="text-[12px] font-medium mb-1.5 tracking-wide" style={{ color: 'var(--color-gold)' }}>{agentName}</div>
-                          <div className="text-[14.5px] leading-[1.75] whitespace-pre-wrap" style={{ color: 'var(--color-ink)' }}>{m.content}</div>
-                        </div>}
-                  </div>
-                ))}
-                {running && !messages.some((m) => m.id === streamId.current) && (
-                  <div className="flex gap-1.5 items-center mb-8">
-                    {[0, 0.2, 0.4].map((d) => <span key={d} className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-gold)', animation: `blink 1.4s ${d}s infinite` }} />)}
-                  </div>
-                )}
-                {error && <div className="text-[13px] rounded-xl px-4 py-2.5 mb-6" style={{ color: 'var(--color-danger)', background: 'rgba(224,121,106,0.1)', border: '1px solid rgba(224,121,106,0.25)' }}>{error}</div>}
-                {changes.length > 0 && (
-                  <div className="mt-1 mb-8">
-                    <div className="label mb-2.5">本次改动 · {changes.length} 个文件</div>
-                    {changes.map((ch) => (
-                      <div key={ch.path}><DiffCard ch={ch} onKeep={() => keepChange(ch.path)} onRevert={() => revertChange(ch)} /></div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* INPUT */}
-            <div className="absolute bottom-0 inset-x-0 px-6 pb-6 pt-12 pointer-events-none" style={{ background: 'linear-gradient(to top, var(--color-bg) 55%, transparent)' }}>
-              <div className="max-w-2xl mx-auto pointer-events-auto">
-                {scene === 'assistant' && (
-                  <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                    {folders.map((f) => (
-                      <span key={f.id} className="inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-full text-[11.5px]"
-                        style={{ background: 'var(--color-panel)', border: '1px solid var(--color-line)', color: 'var(--color-ink-2)' }}>
-                        <span className="font-mono truncate max-w-[170px]" title={f.path}>{f.path.split('/').filter(Boolean).pop() || f.path}</span>
-                        <button onClick={() => removeFolder(f.id)} className="opacity-45 hover:opacity-100"><X className="w-3 h-3" /></button>
-                      </span>
-                    ))}
-                    <button onClick={pickFolder} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11.5px] transition-colors"
-                      style={{ border: '1px dashed var(--color-line-2)', color: 'var(--color-ink-3)' }}>
-                      <FolderPlus className="w-3.5 h-3.5" /> {folders.length ? '加文件夹' : '选择文件夹读取'}
-                    </button>
-                  </div>
-                )}
-                <div className="flex items-end gap-2 p-2 rounded-2xl" style={{ background: 'var(--color-panel)', border: '1px solid var(--color-line-2)' }}>
-                  <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={1} disabled={running}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); run(); } }}
-                    placeholder={scene === 'assistant' ? '问问你的助手…' : '让我改代码 / 修测试…'}
-                    className="flex-1 bg-transparent outline-none resize-none px-3 py-2.5 text-[14px] max-h-44" style={{ color: 'var(--color-ink)' }} />
-                  <button onClick={run} disabled={running || !input.trim()} className="btn btn-gold w-10 h-10 p-0 shrink-0"><ArrowUp className="w-[18px] h-[18px]" /></button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* TRACE */}
-          {scene === 'coding' && (
-            <aside className="w-[340px] shrink-0 hidden lg:flex flex-col" style={{ background: 'var(--color-panel)', borderLeft: '1px solid var(--color-line)' }}>
-              <div className="h-12 flex items-center px-5" style={{ borderBottom: '1px solid var(--color-line)' }}>
-                <span className="label flex items-center gap-2"><Activity className="w-3.5 h-3.5" /> 执行轨迹</span>
-              </div>
-              <div className="flex-1 overflow-y-auto p-5 no-scrollbar">
-                {trace.length === 0 && <div className="text-[12.5px]" style={{ color: 'var(--color-ink-3)' }}>工具调用会实时出现在这里。</div>}
-                <div className="space-y-4">
-                  {trace.map((s) => (
-                    <div key={s.id} className="flex items-start gap-3 rise">
-                      <div className="mt-0.5">
-                        {s.status === 'done' ? <Check className="w-3.5 h-3.5" style={{ color: 'var(--color-ok)' }} strokeWidth={3} />
-                          : s.status === 'error' ? <X className="w-3.5 h-3.5" style={{ color: 'var(--color-danger)' }} strokeWidth={3} />
-                          : <span className="block w-2 h-2 rounded-full mt-1" style={{ background: 'var(--color-gold)', animation: 'blink 1.2s infinite' }} />}
-                      </div>
-                      <div className="min-w-0 font-mono text-[12.5px]">
-                        <div style={{ color: s.status === 'error' ? 'var(--color-danger)' : 'var(--color-ink)' }}>{s.label}</div>
-                        {s.target && <div className="text-[11px] truncate mt-0.5" style={{ color: 'var(--color-ink-3)' }}>{s.target}</div>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </aside>
-          )}
-
-          {/* 日常面板（助手场景）：今日天气 + 待办 */}
-          {scene === 'assistant' && (
-            <aside className="w-[300px] shrink-0 hidden lg:flex flex-col" style={{ background: 'var(--color-panel)', borderLeft: '1px solid var(--color-line)' }}>
-              <div className="h-12 flex items-center px-5" style={{ borderBottom: '1px solid var(--color-line)' }}>
-                <span className="label">今日</span>
-              </div>
-              <div className="flex-1 overflow-y-auto p-5 no-scrollbar space-y-6">
-                <div>
-                  <div className="label mb-2.5 flex items-center gap-2"><CloudSun className="w-3.5 h-3.5" /> 天气{weather?.ok && weather.label ? ` · ${weather.label}` : ''}</div>
-                  {weather?.ok ? (
-                    <div className="card p-3.5" style={{ background: 'var(--color-elevated)' }}>
-                      <div className="flex items-start gap-2">
-                        {weather.today && <Wx day={weather.today} label="今天" />}
-                        {weather.tomorrow && <><span style={{ width: 1, alignSelf: 'stretch', background: 'var(--color-line)' }} /><Wx day={weather.tomorrow} label="明天" /></>}
-                      </div>
-                      {weather.advice && (
-                        <div className="text-[12px] leading-relaxed mt-3 pt-3" style={{ color: 'var(--color-ink-2)', borderTop: '1px solid var(--color-line)' }}>{weather.advice}</div>
-                      )}
-                    </div>
-                  ) : (
-                    <button onClick={() => setShowSettings(true)} className="text-[12.5px] text-left leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>
-                      在设置里填写城市，这里就会显示今天 / 明天天气和出行建议 →
-                    </button>
-                  )}
-                </div>
-
-                <div>
-                  <div className="label mb-2.5">待办</div>
-                  <div className="flex items-center gap-1.5 mb-3">
-                    <input value={newTodo} onChange={(e) => setNewTodo(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') addNewTodo(); }}
-                      placeholder="加一项待办…" className="field py-2 text-[13px]" />
-                    <button onClick={addNewTodo} className="btn btn-gold w-9 h-9 p-0 shrink-0"><Plus className="w-4 h-4" /></button>
-                  </div>
-                  <div className="space-y-0.5">
-                    {todos.filter((t) => !t.done).length === 0 && <div className="text-[12.5px] px-1" style={{ color: 'var(--color-ink-3)' }}>没有待办，清爽。</div>}
-                    {todos.filter((t) => !t.done).map((t) => (
-                      <button key={t.id} onClick={() => toggleTodo(t)} className="w-full flex items-start gap-2 px-1.5 py-1.5 rounded-lg text-left transition-colors hover:bg-[rgba(43,42,39,0.04)]">
-                        <Square className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--color-ink-3)' }} />
-                        <span className="text-[13px]" style={{ color: 'var(--color-ink-2)' }}>{t.text}{t.due && <span className="ml-1.5 text-[11px]" style={{ color: 'var(--color-ink-3)' }}>· {t.due}</span>}</span>
-                      </button>
-                    ))}
-                    {todos.some((t) => t.done) && (
-                      <div className="pt-1.5 mt-1.5" style={{ borderTop: '1px solid var(--color-line)' }}>
-                        {todos.filter((t) => t.done).map((t) => (
-                          <button key={t.id} onClick={() => toggleTodo(t)} className="w-full flex items-start gap-2 px-1.5 py-1.5 rounded-lg text-left transition-colors hover:bg-[rgba(43,42,39,0.04)]">
-                            <CheckSquare className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--color-ok)' }} />
-                            <span className="text-[13px] line-through" style={{ color: 'var(--color-ink-3)' }}>{t.text}</span>
-                          </button>
+          {scene === 'assistant' ? (
+            <>
+              {/* 助手：对话主区 */}
+              <div className="flex-1 flex flex-col min-w-0 relative">
+                <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 pt-10 pb-44 no-scrollbar">
+                  <div className="max-w-2xl mx-auto w-full">
+                    {renderMessages(false)}
+                    {changes.length > 0 && (
+                      <div className="mt-1 mb-8">
+                        <div className="label mb-2.5">本次改动 · {changes.length} 个文件</div>
+                        {changes.map((ch) => (
+                          <div key={ch.path}><DiffCard ch={ch} onKeep={() => keepChange(ch.path)} onRevert={() => revertChange(ch)} /></div>
                         ))}
                       </div>
                     )}
                   </div>
                 </div>
+                <div className="absolute bottom-0 inset-x-0 px-6 pb-6 pt-12 pointer-events-none" style={{ background: 'linear-gradient(to top, var(--color-bg) 55%, transparent)' }}>
+                  <div className="max-w-2xl mx-auto pointer-events-auto">{composer(true)}</div>
+                </div>
               </div>
-            </aside>
+
+              {/* 日常面板：今日天气 + 待办 */}
+              <aside className="w-[300px] shrink-0 hidden lg:flex flex-col" style={{ background: 'var(--color-panel)', borderLeft: '1px solid var(--color-line)' }}>
+                <div className="h-12 flex items-center px-5" style={{ borderBottom: '1px solid var(--color-line)' }}>
+                  <span className="label">今日</span>
+                </div>
+                <div className="flex-1 overflow-y-auto p-5 no-scrollbar space-y-6">
+                  <div>
+                    <div className="label mb-2.5 flex items-center gap-2"><CloudSun className="w-3.5 h-3.5" /> 天气{weather?.ok && weather.label ? ` · ${weather.label}` : ''}</div>
+                    {weather?.ok ? (
+                      <div className="card p-3.5" style={{ background: 'var(--color-elevated)' }}>
+                        <div className="flex items-start gap-2">
+                          {weather.today && <Wx day={weather.today} label="今天" />}
+                          {weather.tomorrow && <><span style={{ width: 1, alignSelf: 'stretch', background: 'var(--color-line)' }} /><Wx day={weather.tomorrow} label="明天" /></>}
+                        </div>
+                        {weather.advice && (
+                          <div className="text-[12px] leading-relaxed mt-3 pt-3" style={{ color: 'var(--color-ink-2)', borderTop: '1px solid var(--color-line)' }}>{weather.advice}</div>
+                        )}
+                      </div>
+                    ) : (
+                      <button onClick={() => setShowSettings(true)} className="text-[12.5px] text-left leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>
+                        在设置里填写城市，这里就会显示今天 / 明天天气和出行建议 →
+                      </button>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="label mb-2.5">待办</div>
+                    <div className="flex items-center gap-1.5 mb-3">
+                      <input value={newTodo} onChange={(e) => setNewTodo(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') addNewTodo(); }}
+                        placeholder="加一项待办…" className="field py-2 text-[13px]" />
+                      <button onClick={addNewTodo} className="btn btn-gold w-9 h-9 p-0 shrink-0"><Plus className="w-4 h-4" /></button>
+                    </div>
+                    <div className="space-y-0.5">
+                      {todos.filter((t) => !t.done).length === 0 && <div className="text-[12.5px] px-1" style={{ color: 'var(--color-ink-3)' }}>没有待办，清爽。</div>}
+                      {todos.filter((t) => !t.done).map((t) => (
+                        <button key={t.id} onClick={() => toggleTodo(t)} className="w-full flex items-start gap-2 px-1.5 py-1.5 rounded-lg text-left transition-colors hover:bg-[rgba(43,42,39,0.04)]">
+                          <Square className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--color-ink-3)' }} />
+                          <span className="text-[13px]" style={{ color: 'var(--color-ink-2)' }}>{t.text}{t.due && <span className="ml-1.5 text-[11px]" style={{ color: 'var(--color-ink-3)' }}>· {t.due}</span>}</span>
+                        </button>
+                      ))}
+                      {todos.some((t) => t.done) && (
+                        <div className="pt-1.5 mt-1.5" style={{ borderTop: '1px solid var(--color-line)' }}>
+                          {todos.filter((t) => t.done).map((t) => (
+                            <button key={t.id} onClick={() => toggleTodo(t)} className="w-full flex items-start gap-2 px-1.5 py-1.5 rounded-lg text-left transition-colors hover:bg-[rgba(43,42,39,0.04)]">
+                              <CheckSquare className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--color-ok)' }} />
+                              <span className="text-[13px] line-through" style={{ color: 'var(--color-ink-3)' }}>{t.text}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </aside>
+            </>
+          ) : (
+            <>
+              {/* 编码 IDE：(文件树 | 编辑器) 上 / 终端 下；右侧对话全高 */}
+              <div className="flex-1 flex flex-col min-w-0">
+                <div className="flex flex-1 min-h-0">
+                  {/* 文件树 */}
+                  <aside className="w-[210px] shrink-0 hidden md:flex flex-col" style={{ background: 'var(--color-panel)', borderRight: '1px solid var(--color-line)' }}>
+                    <div className="h-9 flex items-center px-4 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
+                      <span className="label">工作区</span>
+                    </div>
+                    <div className="flex-1 overflow-y-auto no-scrollbar py-2">
+                      {files.length === 0 && <div className="px-4 text-[12px] leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>还没有文件。<br />给我一个编码任务。</div>}
+                      {files.map((f) => {
+                        const changed = changes.some((c) => c.path === f.path);
+                        const on = activeTab === f.path;
+                        return (
+                          <button key={f.path} onClick={() => openFile(f.path)} className="w-full flex items-center gap-2 px-4 py-1.5 text-left transition-colors"
+                            style={on ? { background: 'var(--color-elevated)' } : {}}>
+                            <FileCode2 className="w-3.5 h-3.5 shrink-0" style={{ color: changed ? 'var(--color-gold)' : 'var(--color-ink-3)' }} />
+                            <span className="font-mono text-[12px] truncate" style={{ color: on ? 'var(--color-ink)' : 'var(--color-ink-2)' }}>{f.path}</span>
+                            {changed && <span className="ml-auto w-1.5 h-1.5 rounded-full shrink-0" style={{ background: 'var(--color-gold)' }} />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </aside>
+
+                  {/* 编辑器：标签页 + 内容 */}
+                  <div className="flex-1 flex flex-col min-w-0" style={{ background: 'var(--color-bg)' }}>
+                    <div className="h-9 flex items-stretch shrink-0 overflow-x-auto no-scrollbar" style={{ borderBottom: '1px solid var(--color-line)', background: 'var(--color-panel)' }}>
+                      {openTabs.length === 0 && <div className="flex items-center px-4 text-[12px]" style={{ color: 'var(--color-ink-3)' }}>编辑器</div>}
+                      {openTabs.map((t) => {
+                        const on = activeTab === t; const changed = changes.some((c) => c.path === t);
+                        return (
+                          <div key={t} onClick={() => setActiveTab(t)} className="flex items-center gap-1.5 px-3 cursor-pointer text-[12px] font-mono shrink-0"
+                            style={{ borderRight: '1px solid var(--color-line)', background: on ? 'var(--color-bg)' : 'transparent', color: on ? 'var(--color-ink)' : 'var(--color-ink-3)' }}>
+                            {changed && <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-gold)' }} />}
+                            {t.split('/').pop()}
+                            <button onClick={(e) => { e.stopPropagation(); closeTab(t); }} className="opacity-40 hover:opacity-100 ml-0.5"><X className="w-3 h-3" /></button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex-1 min-h-0 overflow-hidden">
+                      {!activeTab ? (
+                        <div className="h-full flex items-center justify-center text-center px-8 text-[13px] leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>
+                          左侧选择文件查看；agent 的改动会自动在这里高亮成 diff。
+                        </div>
+                      ) : (() => {
+                        const ch = changes.find((c) => c.path === activeTab);
+                        return ch
+                          ? <div className="h-full overflow-auto no-scrollbar p-3"><DiffCard ch={ch} onKeep={() => keepChange(ch.path)} onRevert={() => revertChange(ch)} /></div>
+                          : <CodeView content={fileCache[activeTab]} />;
+                      })()}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 终端 · 执行轨迹 */}
+                <div className="shrink-0 flex flex-col" style={{ height: 188, borderTop: '1px solid var(--color-line)', background: 'var(--color-panel)' }}>
+                  <div className="h-9 flex items-center px-4 gap-2 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
+                    <Terminal className="w-3.5 h-3.5" style={{ color: 'var(--color-ink-3)' }} />
+                    <span className="label">终端 · 执行轨迹</span>
+                  </div>
+                  <div className="flex-1 overflow-y-auto no-scrollbar px-4 py-2 font-mono text-[12px] leading-[1.75]">
+                    {trace.length === 0 && <div style={{ color: 'var(--color-ink-3)' }}>工具调用会实时出现在这里。</div>}
+                    {trace.map((s) => (
+                      <div key={s.id} className="flex items-center gap-2 rise">
+                        <span className="shrink-0" style={{ color: s.status === 'error' ? 'var(--color-danger)' : s.status === 'done' ? 'var(--color-ok)' : 'var(--color-gold)' }}>
+                          {s.status === 'done' ? '✓' : s.status === 'error' ? '✗' : '▸'}
+                        </span>
+                        <span style={{ color: 'var(--color-ink)' }}>{s.label}</span>
+                        {s.target && <span className="truncate" style={{ color: 'var(--color-ink-3)' }}>{s.target}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* 对话面板 */}
+              <aside className="w-[360px] shrink-0 hidden lg:flex flex-col" style={{ background: 'var(--color-panel)', borderLeft: '1px solid var(--color-line)' }}>
+                <div className="h-9 flex items-center px-4 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
+                  <span className="label flex items-center gap-2"><MessageSquare className="w-3.5 h-3.5" /> 对话</span>
+                </div>
+                <div ref={scrollRef} className="flex-1 overflow-y-auto no-scrollbar px-4 py-4">{renderMessages(true)}</div>
+                <div className="p-3" style={{ borderTop: '1px solid var(--color-line)' }}>{composer(false)}</div>
+              </aside>
+            </>
           )}
         </div>
       </main>

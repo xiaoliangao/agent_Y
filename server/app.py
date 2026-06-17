@@ -440,6 +440,42 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
             f.write(body.content)
         return {"ok": True}
 
+    @app.get("/sessions/{sid}/files")
+    async def list_workspace_files(sid: str, request: Request):  # 编码 IDE：会话工作区文件树（只读）
+        ws = os.path.realpath(os.path.join(request.app.state.data_dir, "sessions", sid, "workspace"))
+        out: list[dict] = []
+        if os.path.isdir(ws):
+            for root, dirs, fns in os.walk(ws):
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ("__pycache__", "node_modules")]
+                for fn in fns:
+                    if fn.startswith("."):
+                        continue
+                    full = os.path.join(root, fn)
+                    try:
+                        size = os.path.getsize(full)
+                    except OSError:
+                        continue
+                    out.append({"path": os.path.relpath(full, ws), "size": size})
+        out.sort(key=lambda f: f["path"])
+        return {"files": out}
+
+    @app.get("/sessions/{sid}/file")
+    async def read_workspace_file(sid: str, path: str, request: Request):  # 编码 IDE：读单个文件（只读、越界防护）
+        ws = os.path.realpath(os.path.join(request.app.state.data_dir, "sessions", sid, "workspace"))
+        target = os.path.realpath(os.path.join(ws, path))
+        if target != ws and not target.startswith(ws + os.sep):
+            raise HTTPException(400, "bad_path")
+        if not os.path.isfile(target):
+            raise HTTPException(404, "file_not_found")
+        if os.path.getsize(target) > 400_000:
+            return {"path": path, "content": "(文件过大，未加载)", "truncated": True}
+        try:
+            with open(target, encoding="utf-8") as f:
+                content = f.read()
+        except (UnicodeDecodeError, OSError):
+            return {"path": path, "content": "(二进制或无法读取的文件)", "truncated": True}
+        return {"path": path, "content": content, "truncated": False}
+
     # ---------- 个人助手：文件夹授权 / 待办 / 提醒（M5）----------
     @app.get("/folders")
     async def list_folders(request: Request):

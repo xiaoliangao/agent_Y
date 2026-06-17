@@ -66,6 +66,14 @@ export const postApproval = (approvalId: string, decision: "allow" | "deny") =>
 export const interruptSession = (sid: string) => post(`/sessions/${sid}/interrupt`);
 export const revertFile = (sid: string, path: string, content: string) => post(`/sessions/${sid}/revert`, { path, content });
 
+// 编码 IDE：会话工作区文件树 + 读单文件（只读）
+export interface WorkspaceFile { path: string; size: number; }
+export const listWorkspaceFiles = (sid: string) =>
+  j<{ files: WorkspaceFile[] }>(`/sessions/${sid}/files`).then((d) => d.files ?? []).catch(() => []);
+export const readWorkspaceFile = (sid: string, path: string) =>
+  j<{ path: string; content: string; truncated: boolean }>(`/sessions/${sid}/file?path=${encodeURIComponent(path)}`)
+    .catch(() => ({ path, content: '(读取失败)', truncated: false }));
+
 // ---------- BYOK / 模型 / 设置 ----------
 export const listProviders = () => j<{ connections: Connection[] }>("/providers").then((d) => d.connections ?? []).catch(() => []);
 export const addProvider = (p: { provider: string; api_key: string; base_url?: string; model_default?: string }) => post("/providers", p);

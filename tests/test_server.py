@@ -245,6 +245,22 @@ async def test_providers_models_settings_endpoints(tmp_path):
         assert (await client.delete(f"/providers/{cid}")).json()["ok"] is True
 
 
+async def test_workspace_files_list_and_read(tmp_path):
+    app = _app(tmp_path, MockProvider([script_text("ok")]))
+    async with _client(app) as client:
+        sid = (await client.post("/sessions", json={"scenario": "coding"})).json()["session_id"]
+        ws = tmp_path / "data" / "sessions" / sid / "workspace"
+        (ws / "sub").mkdir(parents=True)
+        (ws / "a.py").write_text("print(1)\n")
+        (ws / "sub" / "b.txt").write_text("hi")
+        paths = [f["path"] for f in (await client.get(f"/sessions/{sid}/files")).json()["files"]]
+        assert "a.py" in paths and "sub/b.txt" in paths
+        r = (await client.get(f"/sessions/{sid}/file", params={"path": "a.py"})).json()
+        assert r["content"] == "print(1)\n" and r["truncated"] is False
+        assert (await client.get(f"/sessions/{sid}/file", params={"path": "../../../etc/hosts"})).status_code == 400
+        assert (await client.get(f"/sessions/{sid}/file", params={"path": "nope.py"})).status_code == 404
+
+
 async def test_serves_frontend_when_present(tmp_path):
     fe = tmp_path / "fe"
     fe.mkdir()
