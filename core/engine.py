@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from core.abort import AbortSignal
 from core.harness.approval import ApprovalMode
 from core.loop import LoopEvent, agent_loop
+from core.memory.recall import age_caveat, humanize_age
+from core.memory.reflect import extract_memories
 from core.obs.tracer import ConsoleTracer
 from core.tools.base import PermissionResult, Tool, ToolContext
 from core.types import Message, TextBlock
@@ -34,6 +37,10 @@ class SessionEngine:
         transcript_path: str | None = None,
         cwd: str = ".",
         max_turns: int = 30,
+        context_manager: Any = None,
+        memory_store: Any = None,
+        reflect: bool = False,
+        memory_recall_k: int = 5,
     ):
         self.provider = provider
         self.tools = tools
@@ -46,6 +53,10 @@ class SessionEngine:
         self.transcript_path = transcript_path
         self.cwd = cwd
         self.max_turns = max_turns
+        self.context_manager = context_manager  # 可选：上下文压缩（每轮调模型前）
+        self.memory_store = memory_store  # 可选：长期记忆（召回注入 + 反思沉淀）
+        self.reflect = reflect  # 会话结束后是否提炼记忆
+        self.memory_recall_k = memory_recall_k
         self.messages: list[Message] = []
         self.abort = AbortSignal()
 
@@ -56,18 +67,53 @@ class SessionEngine:
         user_msg = Message(role="user", content=[TextBlock(text=text)])
         self.messages.append(user_msg)
         self._persist(user_msg)
+        system = await self._augment_system(text)
         ctx = ToolContext(
             cwd=self.cwd, sandbox=self.sandbox, abort=self.abort, read_file_state={},
             approval_mode=self.approval_mode, request_approval=self.request_approval,
             tracer=self.tracer,
         )
+        on_before = self.context_manager.maybe_compact if self.context_manager is not None else None
         async for ev in agent_loop(
-            messages=self.messages, system=self.system, provider=self.provider,
+            messages=self.messages, system=system, provider=self.provider,
             tools=self.tools, ctx=ctx, model=self.model, max_turns=self.max_turns,
+            on_before_turn=on_before,
         ):
             if ev.message is not None:
                 self._persist(ev.message)
             yield ev
+        await self._reflect()
+
+    async def _augment_system(self, text: str) -> str:
+        """把 MEMORY.md 索引 + 召回的相关记忆拼进 system（无 memory_store 则原样）。"""
+        if self.memory_store is None:
+            return self.system
+        parts = [self.system]
+        index = self.memory_store.load_index()
+        if index.strip():
+            parts.append("# 长期记忆索引 (MEMORY.md)\n" + index)
+        try:
+            recalled = await self.memory_store.recall(text, k=self.memory_recall_k)
+        except Exception:
+            recalled = []
+        if recalled:
+            now = time.time()
+            blocks = [
+                f'<memory name="{m.name}" age="{humanize_age(m.mtime, now)}">'
+                f"{age_caveat(m.mtime, now)}\n{m.body}\n</memory>"
+                for m in recalled
+            ]
+            parts.append("# 召回的相关记忆\n" + "\n".join(blocks))
+        return "\n\n".join(parts)
+
+    async def _reflect(self) -> None:
+        """会话结束后提炼记忆（失败不影响主流程）。"""
+        if self.memory_store is None or not self.reflect:
+            return
+        try:
+            await extract_memories(self.memory_store, self.provider, self.model, self.messages)
+        except Exception:
+            pass
 
     def _persist(self, msg: Message) -> None:
         if not self.transcript_path:
