@@ -58,23 +58,22 @@ def _get_provider(app: FastAPI) -> Any:
 
 
 def _frames(ev: LoopEvent) -> list[dict]:
-    """LoopEvent → SSE 事件帧（见 design §4.1.2）。"""
-    out: list[dict] = []
-    if ev.kind == "assistant" and ev.message is not None:
-        for b in ev.message.content:
-            if b.type == "text" and b.text:
-                out.append({"type": "text_delta", "text": b.text})
-            elif b.type == "thinking" and b.thinking:
-                out.append({"type": "thinking_delta", "text": b.thinking})
-            elif b.type == "tool_use":
-                out.append({"type": "tool_use", "id": b.id, "name": b.name, "input": b.input})
-    elif ev.kind == "tool_results" and ev.message is not None:
-        for b in ev.message.content:
-            out.append({"type": "tool_result", "id": b.tool_use_id,
-                        "is_error": b.is_error, "preview": str(b.content)[:500]})
-    elif ev.kind == "done":
-        out.append({"type": "done", "reason": ev.reason})
-    return out
+    """LoopEvent → SSE 事件帧（见 design §4.1.2）。token 级：text_delta 来自 live delta。
+
+    'assistant' 事件不产帧（文本已逐字流过，避免重复），但 drive() 仍据其 message 持久化。
+    """
+    if ev.kind == "text_delta" and ev.text:
+        return [{"type": "text_delta", "text": ev.text}]
+    if ev.kind == "thinking_delta" and ev.text:
+        return [{"type": "thinking_delta", "text": ev.text}]
+    if ev.kind == "tool_use" and ev.tool_use is not None:
+        return [{"type": "tool_use", "id": ev.tool_use.id, "name": ev.tool_use.name, "input": ev.tool_use.input}]
+    if ev.kind == "tool_results" and ev.message is not None:
+        return [{"type": "tool_result", "id": b.tool_use_id, "is_error": b.is_error,
+                 "preview": str(b.content)[:500]} for b in ev.message.content]
+    if ev.kind == "done":
+        return [{"type": "done", "reason": ev.reason}]
+    return []
 
 
 def _build_engine(app: FastAPI, sid: str) -> SessionEngine:

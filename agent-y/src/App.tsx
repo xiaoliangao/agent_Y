@@ -47,6 +47,7 @@ export default function App() {
   const [approval, setApproval] = useState<Approval | null>(null);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const streamingIdRef = useRef<string | null>(null); // 当前正在逐字累积的助手气泡 id
 
   const refreshThreads = async () => setThreads(await listSessions().catch(() => []));
   useEffect(() => { refreshThreads(); }, []);
@@ -56,10 +57,20 @@ export default function App() {
 
   const handleFrame = (fr: Frame) => {
     switch (fr.type) {
-      case 'text_delta':
-        if (fr.text) setMessages((p) => [...p, { id: uid(), role: 'assistant', content: fr.text }]);
+      case 'text_delta': {
+        if (!fr.text) break;
+        const cur = streamingIdRef.current;
+        if (cur) {
+          setMessages((p) => p.map((m) => (m.id === cur ? { ...m, content: m.content + fr.text } : m)));
+        } else {
+          const id = uid();
+          streamingIdRef.current = id;
+          setMessages((p) => [...p, { id, role: 'assistant', content: fr.text }]);
+        }
         break;
+      }
       case 'tool_use':
+        streamingIdRef.current = null; // 工具调用 → 结束当前文本气泡
         setTrace((p) => [...p, { id: fr.id, label: fr.name, target: traceTarget(fr.input), status: 'running' }]);
         break;
       case 'tool_result':
@@ -67,6 +78,9 @@ export default function App() {
         break;
       case 'approval_request':
         setApproval(fr);
+        break;
+      case 'done':
+        streamingIdRef.current = null;
         break;
       case 'error':
         setError(fr.message);
@@ -81,6 +95,7 @@ export default function App() {
     setError(null);
     setRunning(true);
     setMessages((p) => [...p, { id: uid(), role: 'user', content: text }]);
+    streamingIdRef.current = null;
     try {
       let sid = sessionId;
       if (!sid) {

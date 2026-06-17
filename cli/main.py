@@ -93,14 +93,18 @@ async def _run(args: argparse.Namespace) -> int:
 
     print(f"workspace: {workspace}\nprovider: {args.provider} · model: {args.model} · sandbox: {args.sandbox}\n")
     reason = "error"
+    streaming = False  # 是否正在逐字打印一段助手文本
     async for ev in engine.submit(args.task):
-        if ev.kind == "assistant":
-            if t := _text(ev.message):
-                print(f"🤖 {t}")
-            for b in ev.message.content:
-                if getattr(b, "type", "") == "tool_use":
-                    print(f"   → {b.name}({b.input})")
-        elif ev.kind == "tool_results":
+        if ev.kind == "text_delta":
+            if not streaming:
+                print("🤖 ", end="", flush=True)
+                streaming = True
+            print(ev.text, end="", flush=True)
+        elif ev.kind == "tool_use" and ev.tool_use is not None:
+            streaming = False
+            print(f"\n   → {ev.tool_use.name}({ev.tool_use.input})", flush=True)
+        elif ev.kind == "tool_results" and ev.message is not None:
+            streaming = False
             for b in ev.message.content:
                 flag = "❌" if b.is_error else "✅"
                 print(f"   {flag} {str(b.content)[:140]}")
