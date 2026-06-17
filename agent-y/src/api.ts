@@ -58,6 +58,7 @@ export const listProviders = () => j<{ connections: Connection[] }>("/providers"
 export const addProvider = (p: { provider: string; api_key: string; base_url?: string; model_default?: string }) => post("/providers", p);
 export const activateProvider = (id: string) => post(`/providers/${id}/activate`);
 export const deleteProvider = (id: string) => j(`/providers/${id}`, { method: "DELETE" });
+export const testProvider = (id: string) => post(`/providers/${id}/test`) as Promise<{ ok: boolean; latency_ms?: number; error?: string }>;
 export const listModels = () => j<{ models: ModelInfo[] }>("/models").then((d) => d.models ?? []).catch(() => []);
 export const getSettings = () => j<{ settings: Settings; persona_suggestion: string }>("/settings");
 export const putSettings = (s: Partial<Settings>) => j<{ settings: Settings }>("/settings", {

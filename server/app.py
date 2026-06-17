@@ -392,6 +392,40 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
             raise HTTPException(404, "connection_not_found")
         return {"ok": True}
 
+    @app.post("/providers/{cid}/test")
+    async def test_provider(cid: str, request: Request):
+        import time
+
+        ps = request.app.state.providers
+        conn = ps.get(cid)
+        if not conn:
+            raise HTTPException(404, "connection_not_found")
+        key = ps.get_key(cid)
+        if conn["provider"] == "openai":
+            from core.providers.openai_compat import OpenAICompatProvider
+
+            prov: Any = OpenAICompatProvider(api_key=key, base_url=conn["base_url"])
+            model = conn["model_default"] or "deepseek-chat"
+        else:
+            from core.providers.anthropic import AnthropicProvider
+
+            prov = AnthropicProvider(api_key=key)
+            model = conn["model_default"] or "claude-sonnet-4-6"
+        t0 = time.monotonic()
+
+        async def _probe():
+            async for _ev in prov.stream(
+                system="", messages=[Message(role="user", content=[TextBlock(text="hi")])],
+                tools=[], model=model, max_tokens=1,
+            ):
+                return  # 收到首个事件即算连通
+
+        try:
+            await asyncio.wait_for(_probe(), timeout=20)
+            return {"ok": True, "latency_ms": round((time.monotonic() - t0) * 1000)}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"[:200]}
+
     @app.get("/models")
     async def list_models():
         return {"models": MODELS}

@@ -73,3 +73,12 @@ textarea, input { font-family: inherit; }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .rise { animation: rise .4s cubic-bezier(.2,.7,.3,1) both; }
 @keyframes blink { 0%,100% { opacity: .25; } 50% { opacity: 1; } }
+
+/* Agent「在场感」光球（Marvis 式拟人化）：空闲缓呼吸、运行时脉冲 */
+.orb {
+  border-radius: 9999px;
+  background: radial-gradient(circle at 38% 32%, #fff6e6 0%, var(--color-gold) 44%, #a87a36 100%);
+  box-shadow: 0 0 36px rgba(214,168,102,0.45), inset 0 -3px 10px rgba(120,80,20,0.35), inset 0 3px 8px rgba(255,255,255,0.35);
+}
+@keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+@keyframes ring { 0% { transform: scale(.85); opacity: .55; } 100% { transform: scale(1.9); opacity: 0; } }

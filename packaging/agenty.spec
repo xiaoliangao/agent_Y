@@ -51,7 +51,7 @@ coll = COLLECT(exe, a.binaries, a.datas, name="AgentY")
 app = BUNDLE(
     coll,
     name="Agent Y.app",
-    icon=None,
+    icon=os.path.join(ROOT, "packaging", "icon.icns"),
     bundle_identifier="com.agenty.app",
     info_plist={
         "NSHighResolutionCapable": True,

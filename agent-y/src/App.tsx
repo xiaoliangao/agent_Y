@@ -27,6 +27,21 @@ function toChat(stored: { role: string; content: any[] }[]): Msg[] {
   return out;
 }
 
+function greet(): string {
+  const h = new Date().getHours();
+  return h < 5 ? '夜深了。' : h < 11 ? '早上好。' : h < 14 ? '中午好。' : h < 18 ? '下午好。' : '晚上好。';
+}
+
+// Agent「在场感」光球：空闲缓呼吸，运行时脉冲（Marvis 式拟人化）
+function AgentOrb({ running, size = 64 }: { running: boolean; size?: number }) {
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      {running && <span className="absolute inset-0 rounded-full" style={{ background: 'var(--color-gold)', animation: 'ring 1.5s ease-out infinite' }} />}
+      <div className="orb absolute inset-0" style={{ animation: `breathe ${running ? 1.3 : 4.5}s ease-in-out infinite` }} />
+    </div>
+  );
+}
+
 export default function App() {
   const [scene, setScene] = useState<'coding' | 'assistant'>('assistant');
   const [threads, setThreads] = useState<SessionSummary[]>([]);
@@ -91,8 +106,8 @@ export default function App() {
     <div className="flex h-screen w-full overflow-hidden" style={{ color: 'var(--color-ink)' }}>
       {/* SIDEBAR */}
       <aside className="w-[258px] shrink-0 hidden md:flex flex-col" style={{ background: 'var(--color-panel)', borderRight: '1px solid var(--color-line)' }}>
-        <div className="h-16 flex items-center px-5 gap-2.5">
-          <div className="w-2 h-2 rounded-full" style={{ background: 'var(--color-gold)', boxShadow: '0 0 12px var(--color-gold)' }} />
+        <div className="h-16 flex items-center px-5 gap-3">
+          <AgentOrb running={running} size={18} />
           <span className="font-serif text-[22px] leading-none tracking-tight">{agentName}</span>
         </div>
 
@@ -137,7 +152,10 @@ export default function App() {
             <KeyRound className="w-3.5 h-3.5" style={{ color: active ? 'var(--color-gold)' : 'var(--color-danger)' }} />
             <span style={{ color: 'var(--color-ink-2)' }}>{active ? (active.model_default || active.provider) : '未配置模型'}</span>
           </button>
-          <div className="text-[12px] font-mono" style={{ color: 'var(--color-ink-3)' }}>{running ? '运行中…' : 'idle'}</div>
+          <div className="flex items-center gap-2">
+            <AgentOrb running={running} size={13} />
+            <span className="text-[12px]" style={{ color: 'var(--color-ink-3)' }}>{running ? '思考中…' : '在线'}</span>
+          </div>
         </header>
 
         <div className="flex flex-1 overflow-hidden">
@@ -145,15 +163,16 @@ export default function App() {
             <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 pt-10 pb-44 no-scrollbar">
               <div className="max-w-2xl mx-auto w-full">
                 {messages.length === 0 && (
-                  <div className="mt-24 text-center rise">
-                    <div className="font-serif text-[40px] leading-tight mb-3">晚上好。</div>
-                    <p className="text-[14px]" style={{ color: 'var(--color-ink-3)' }}>
+                  <div className="mt-20 flex flex-col items-center text-center rise">
+                    <AgentOrb running={running} size={72} />
+                    <div className="font-serif text-[40px] leading-tight mt-7 mb-2">{greet()}</div>
+                    <p className="text-[14px] max-w-sm" style={{ color: 'var(--color-ink-3)' }}>
                       {conns.length === 0
-                        ? '先到设置里配一个模型连接，我们就能开始。'
-                        : scene === 'assistant' ? '问我点什么，或让我帮你整理文件、起草、做表格。' : '给我一个编码任务，我会读/改/跑测试。'}
+                        ? '我是你的私人 AI 助手。先配一个模型连接，我们就能开始。'
+                        : scene === 'assistant' ? '问我点什么，或让我帮你整理文件、起草、做表格。' : '给我一个编码任务，我会读 / 改 / 跑测试。'}
                     </p>
                     {conns.length === 0 && (
-                      <button onClick={() => setShowSettings(true)} className="btn btn-gold mt-6 mx-auto"><KeyRound className="w-4 h-4" /> 配置模型连接</button>
+                      <button onClick={() => setShowSettings(true)} className="btn btn-gold mt-6"><KeyRound className="w-4 h-4" /> 配置模型连接</button>
                     )}
                   </div>
                 )}
