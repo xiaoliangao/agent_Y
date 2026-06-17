@@ -20,6 +20,7 @@
 
 | 文档 | 作用 |
 |---|---|
+| [`docs/HANDOVER.md`](docs/HANDOVER.md) | **🤝 交接文档：接手先读这份** —— 现状 / 五分钟上手 / 代码地图 / 关键决策 / 已完成vs待办 / 下一步 / 安全注意 |
 | [`docs/PRD.md`](docs/PRD.md) | **需求**：目标 / 用户故事 / 功能 / 原型图 / 里程碑 / MVP DoD / 决策。技术栈与范围以此为准 |
 | [`docs/design.md`](docs/design.md) | **系统设计**：架构、**§4 接口契约**（前后端 REST+SSE / Provider / Tool / Sandbox / Memory）、数据模型、M1 拆解。两人协作的冻结面 |
 | [`docs/research.md`](docs/research.md) | **调研**：memory / 自进化 / harness·loop·context engineering 业界做法 + OpenAI 侧复核 + 术语表，带引用 |
