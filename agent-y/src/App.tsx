@@ -146,7 +146,7 @@ function CodeView({ content }: { content?: string }) {
   if (content === undefined) return <div className="p-5 text-[12.5px]" style={{ color: 'var(--color-ink-3)' }}>加载中…</div>;
   const lines = content.split('\n');
   return (
-    <div className="h-full overflow-auto no-scrollbar" style={{ background: 'var(--color-panel)' }}>
+    <div className="h-full overflow-auto no-scrollbar">
       <pre className="text-[12px] font-mono leading-[1.6] py-2">
         {lines.map((line, i) => (
           <div key={i} className="flex">
@@ -206,7 +206,7 @@ function FileTree({ files, activeTab, changedPaths, onOpen }: {
     const changed = changedPaths.has(n.path);
     return (
       <button key={n.path} onClick={() => onOpen(n.path)} className="w-full flex items-center gap-1.5 py-1 text-left transition-colors hover:bg-[rgba(255,255,255,0.04)]"
-        style={{ paddingLeft: pad + 16, paddingRight: 10, background: on ? 'var(--color-elevated)' : 'transparent' }}>
+        style={{ paddingLeft: pad + 16, paddingRight: 10, background: on ? 'var(--color-elevated)' : 'transparent', boxShadow: on ? 'inset 2px 0 0 var(--color-gold)' : 'none' }}>
         <FileCode2 className="w-3.5 h-3.5 shrink-0" style={{ color: changed ? 'var(--color-gold)' : 'var(--color-ink-3)' }} />
         <span className="font-mono text-[12px] truncate" style={{ color: on ? 'var(--color-ink)' : 'var(--color-ink-2)' }}>{n.name}</span>
         {changed && <span className="ml-auto w-1.5 h-1.5 rounded-full shrink-0" style={{ background: 'var(--color-gold)' }} />}
@@ -612,7 +612,7 @@ export default function App() {
               <div className="flex-1 flex flex-col min-w-0">
                 <div className="flex flex-1 min-h-0">
                   {/* 文件树 / 资源管理器 */}
-                  <aside className="w-[232px] shrink-0 hidden md:flex flex-col" style={{ background: 'var(--color-panel)', borderRight: '1px solid var(--color-line)' }}>
+                  <aside className="w-[232px] shrink-0 hidden md:flex flex-col relative z-10" style={{ background: 'var(--color-panel)', boxShadow: '8px 0 28px -16px rgba(0,0,0,0.9)' }}>
                     <div className="h-9 flex items-center gap-0.5 pl-4 pr-2 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
                       <span className="label truncate flex-1" title={wsCustom ? wsName : '会话工作区'}>
                         {wsCustom ? wsName : '工作区'}
@@ -639,14 +639,14 @@ export default function App() {
                   </aside>
 
                   {/* 编辑器：标签页 + 内容 */}
-                  <div className="flex-1 flex flex-col min-w-0" style={{ background: 'var(--color-bg)' }}>
-                    <div className="h-9 flex items-stretch shrink-0 overflow-x-auto no-scrollbar" style={{ borderBottom: '1px solid var(--color-line)', background: 'var(--color-panel)' }}>
+                  <div className="flex-1 flex flex-col min-w-0" style={{ background: 'radial-gradient(760px 340px at 50% -6%, rgba(224,144,90,0.05), transparent 70%), var(--color-bg)' }}>
+                    <div className="h-9 flex items-stretch shrink-0 overflow-x-auto no-scrollbar relative z-10" style={{ background: 'var(--color-panel)', boxShadow: '0 6px 16px -10px rgba(0,0,0,0.8)' }}>
                       {openTabs.length === 0 && <div className="flex items-center px-4 text-[12px]" style={{ color: 'var(--color-ink-3)' }}>编辑器</div>}
                       {openTabs.map((t) => {
                         const on = activeTab === t; const changed = changes.some((c) => c.path === t);
                         return (
                           <div key={t} onClick={() => setActiveTab(t)} className="flex items-center gap-1.5 px-3 cursor-pointer text-[12px] font-mono shrink-0"
-                            style={{ borderRight: '1px solid var(--color-line)', background: on ? 'var(--color-bg)' : 'transparent', color: on ? 'var(--color-ink)' : 'var(--color-ink-3)' }}>
+                            style={{ borderRight: '1px solid var(--color-line)', background: on ? 'var(--color-bg)' : 'transparent', color: on ? 'var(--color-ink)' : 'var(--color-ink-3)', boxShadow: on ? 'inset 0 2px 0 var(--color-gold)' : 'none' }}>
                             {changed && <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-gold)' }} />}
                             {t.split('/').pop()}
                             <button onClick={(e) => { e.stopPropagation(); closeTab(t); }} className="opacity-40 hover:opacity-100 ml-0.5"><X className="w-3 h-3" /></button>
@@ -677,7 +677,7 @@ export default function App() {
                 </div>
 
                 {/* 终端 · 执行轨迹 */}
-                <div className="shrink-0 flex flex-col" style={{ height: 188, borderTop: '1px solid var(--color-line)', background: 'var(--color-panel)' }}>
+                <div className="shrink-0 flex flex-col relative z-10" style={{ height: 188, background: 'var(--color-panel)', boxShadow: '0 -8px 22px -12px rgba(0,0,0,0.85)' }}>
                   <div className="h-9 flex items-center px-4 gap-2 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
                     <Terminal className="w-3.5 h-3.5" style={{ color: 'var(--color-ink-3)' }} />
                     <span className="label">终端 · 执行轨迹</span>
@@ -698,7 +698,7 @@ export default function App() {
               </div>
 
               {/* 对话面板 */}
-              <aside className="w-[360px] shrink-0 hidden lg:flex flex-col" style={{ background: 'var(--color-panel)', borderLeft: '1px solid var(--color-line)' }}>
+              <aside className="w-[360px] shrink-0 hidden lg:flex flex-col relative z-10" style={{ background: 'var(--color-panel)', boxShadow: '-8px 0 28px -16px rgba(0,0,0,0.9)' }}>
                 <div className="h-9 flex items-center px-4 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
                   <span className="label flex items-center gap-2"><MessageSquare className="w-3.5 h-3.5" /> 对话</span>
                 </div>
