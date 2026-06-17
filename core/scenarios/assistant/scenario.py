@@ -1,0 +1,51 @@
+"""个人助手场景：工具集 + 系统提示。见 docs/design.md §4.6（M5）。
+
+文件问答 + 办公文档 + 起草，全部在用户授权目录内操作（FolderAccess，§5.2）。
+"""
+from __future__ import annotations
+
+from core.harness.fs_access import FolderAccess
+from core.tools.assistant import (
+    DocxWriteTool,
+    DraftTool,
+    PptxBuildTool,
+    ReadDirTool,
+    SearchFilesTool,
+    SummarizeFilesTool,
+    XlsxWriteTool,
+)
+
+ASSISTANT_SYSTEM_PROMPT = """你是 Agent Y 的个人助手，帮用户处理日常事务：文件问答、整理、起草、生成办公文档。
+
+工作方式：
+- 你只能访问用户**显式授权的目录**；用 read_dir / search_files / summarize_files 查看文件后再回答，不要臆测文件内容。
+- 回答涉及文件时**引用来源**（文件名、必要的行）。
+- 生成办公文档用 xlsx_write / docx_write / pptx_build；写文件是越权操作，会先请用户确认。
+- 起草邮件/周报/文档用 draft（纯文本，用户审阅后自行使用）。
+- 一步只做一件清楚的事；工具失败会把错误回灌给你，据此调整。
+
+风格：简洁直接、少废话。完成后用一两句话说明做了什么、产物在哪。"""
+
+
+class AssistantScenario:
+    name = "assistant"
+
+    def __init__(self, fs: FolderAccess) -> None:
+        self.fs = fs
+
+    def tools(self) -> list:
+        return [
+            ReadDirTool(self.fs),
+            SearchFilesTool(self.fs),
+            SummarizeFilesTool(self.fs),
+            DraftTool(),
+            XlsxWriteTool(self.fs),
+            DocxWriteTool(self.fs),
+            PptxBuildTool(self.fs),
+        ]
+
+    def system_prompt(self) -> str:
+        return ASSISTANT_SYSTEM_PROMPT
+
+    def skills_dir(self) -> str | None:
+        return None
