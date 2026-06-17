@@ -22,9 +22,12 @@ from pydantic import BaseModel
 
 from core.engine import SessionEngine
 from core.harness.approval import ApprovalMode
+from core.harness.fs_access import FolderAccess
 from core.loop import LoopEvent
 from core.sandbox.local import LocalExecutor
+from core.scenarios.assistant.scenario import AssistantScenario
 from core.scenarios.coding.scenario import CodingScenario
+from core.scheduler.store import SchedulerStore
 from core.store import Store
 from core.types import Message, TextBlock
 
@@ -41,6 +44,29 @@ class MsgIn(BaseModel):
 class ApprovalIn(BaseModel):
     decision: str
     scope: str | None = None
+
+
+class FolderIn(BaseModel):
+    path: str
+    mode: str | None = None
+
+
+class TodoIn(BaseModel):
+    text: str
+    due: str | None = None
+
+
+class TodoPatch(BaseModel):
+    done: bool | None = None
+    text: str | None = None
+    due: str | None = None
+
+
+class ReminderIn(BaseModel):
+    text: str
+    fire_at: str
+    todo_id: str | None = None
+    repeat: str | None = None
 
 
 def _get_provider(app: FastAPI) -> Any:
@@ -77,7 +103,11 @@ def _frames(ev: LoopEvent) -> list[dict]:
 
 
 def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
-    scenario = CodingScenario()
+    sess = app.state.store.get_session(sid)
+    if sess and sess.get("scenario") == "assistant":
+        scenario: Any = AssistantScenario(app.state.fs)
+    else:
+        scenario = CodingScenario()
     workspace = os.path.join(app.state.data_dir, "sessions", sid, "workspace")
     os.makedirs(workspace, exist_ok=True)
     provider = _get_provider(app)
@@ -172,6 +202,8 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
     )
     app.state.approvals = {}   # approval_id -> Future
     app.state.runs = {}        # sid -> {task, engine}
+    app.state.fs = FolderAccess(os.path.join(data_dir, "folders.json"))  # 助手文件夹授权
+    app.state.scheduler = SchedulerStore(os.path.join(data_dir, "scheduler.db"))  # 待办/提醒
 
     @app.exception_handler(HTTPException)
     async def _http_exc(_req: Request, exc: HTTPException):  # 统一错误信封（design §4.0）
@@ -222,6 +254,58 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
         run = request.app.state.runs.get(sid)
         if run:
             run["engine"].interrupt()
+        return {"ok": True}
+
+    # ---------- 个人助手：文件夹授权 / 待办 / 提醒（M5）----------
+    @app.get("/folders")
+    async def list_folders(request: Request):
+        return {"folders": request.app.state.fs.list()}
+
+    @app.post("/folders", status_code=201)
+    async def add_folder(body: FolderIn, request: Request):
+        return request.app.state.fs.authorize(body.path, mode=body.mode or "read_write")
+
+    @app.delete("/folders/{fid}")
+    async def del_folder(fid: str, request: Request):
+        if not request.app.state.fs.revoke(fid):
+            raise HTTPException(404, "folder_not_found")
+        return {"ok": True}
+
+    @app.get("/todos")
+    async def list_todos(request: Request):
+        return {"todos": request.app.state.scheduler.list_todos()}
+
+    @app.post("/todos", status_code=201)
+    async def add_todo(body: TodoIn, request: Request):
+        return request.app.state.scheduler.add_todo(body.text, due=body.due)
+
+    @app.patch("/todos/{tid}")
+    async def patch_todo(tid: str, body: TodoPatch, request: Request):
+        t = request.app.state.scheduler.update_todo(tid, done=body.done, text=body.text, due=body.due)
+        if t is None:
+            raise HTTPException(404, "todo_not_found")
+        return t
+
+    @app.delete("/todos/{tid}")
+    async def del_todo(tid: str, request: Request):
+        if not request.app.state.scheduler.delete_todo(tid):
+            raise HTTPException(404, "todo_not_found")
+        return {"ok": True}
+
+    @app.get("/reminders")
+    async def list_reminders(request: Request):
+        return {"reminders": request.app.state.scheduler.list_reminders()}
+
+    @app.post("/reminders", status_code=201)
+    async def add_reminder(body: ReminderIn, request: Request):
+        return request.app.state.scheduler.add_reminder(
+            body.text, body.fire_at, todo_id=body.todo_id, repeat=body.repeat
+        )
+
+    @app.delete("/reminders/{rid}")
+    async def del_reminder(rid: str, request: Request):
+        if not request.app.state.scheduler.delete_reminder(rid):
+            raise HTTPException(404, "reminder_not_found")
         return {"ok": True}
 
     return app

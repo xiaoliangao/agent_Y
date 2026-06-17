@@ -137,3 +137,37 @@ async def test_memory_can_be_disabled(tmp_path):
     eng = _build_engine(app, sid)
     assert eng.memory_store is None and eng.reflect is False
     assert eng.context_manager is not None
+
+
+async def test_folders_crud(tmp_path):
+    async with _client(_app(tmp_path, MockProvider([]))) as client:
+        r = await client.post("/folders", json={"path": str(tmp_path / "docs")})
+        assert r.status_code == 201
+        fid = r.json()["id"]
+        assert any(f["id"] == fid for f in (await client.get("/folders")).json()["folders"])
+        assert (await client.delete(f"/folders/{fid}")).json()["ok"] is True
+        assert (await client.delete(f"/folders/{fid}")).status_code == 404
+
+
+async def test_todos_and_reminders_endpoints(tmp_path):
+    async with _client(_app(tmp_path, MockProvider([]))) as client:
+        t = (await client.post("/todos", json={"text": "买菜"})).json()
+        assert t["text"] == "买菜"
+        await client.patch(f"/todos/{t['id']}", json={"done": True})
+        assert (await client.get("/todos")).json()["todos"][0]["done"] is True
+        rem = (await client.post(
+            "/reminders", json={"text": "r", "fire_at": "2030-01-01T00:00:00Z"}
+        )).json()
+        assert rem["text"] == "r"
+        assert (await client.delete(f"/reminders/{rem['id']}")).json()["ok"] is True
+
+
+async def test_assistant_scenario_selected(tmp_path):
+    from server.app import _build_engine
+
+    app = _app(tmp_path, MockProvider([]))
+    app.state.fs.authorize(str(tmp_path))
+    sid = app.state.store.create_session(title="a", scenario="assistant")["id"]
+    eng = _build_engine(app, sid)
+    names = {t.name for t in eng.tools}
+    assert "read_dir" in names and "xlsx_write" in names
