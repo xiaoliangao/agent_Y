@@ -18,8 +18,24 @@ class Tracer(Protocol):
     def span(self, name: str, parent: str | None = None, **attrs: Any) -> SpanCtx: ...
 
 
-class ConsoleTracer:
-    """M1 最简实现：打印 run/llm/tool span。TODO(M1 Issue#9)。"""
+class _Span:
+    def __init__(self, name: str, attrs: dict[str, Any]):
+        self.name = name
+        self.attrs = dict(attrs)
 
-    def span(self, name: str, parent: str | None = None, **attrs: Any) -> SpanCtx:
-        raise NotImplementedError
+    def __enter__(self) -> "_Span":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        extra = " ".join(f"{k}={v}" for k, v in self.attrs.items())
+        print(f"  ▸ {self.name}{(' ' + extra) if extra else ''}")
+
+    def set(self, **attrs: Any) -> None:
+        self.attrs.update(attrs)
+
+
+class ConsoleTracer:
+    """M1 最简实现：把每个 span 打到 stdout（run/llm/tool）。"""
+
+    def span(self, name: str, parent: str | None = None, **attrs: Any) -> _Span:
+        return _Span(name, attrs)

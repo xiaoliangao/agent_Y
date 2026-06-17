@@ -32,4 +32,13 @@ def gate(perm: "PermissionResult", mode: ApprovalMode) -> Literal["allow", "deny
       - AUTO → 把 ask 降为 allow（risk=high 除外）
       - is_destructive 或 risk=high → 强制 ask（不可逆/外发/写工作区外）
     """
-    raise NotImplementedError  # 骨架桩
+    if mode == ApprovalMode.READ_ONLY:
+        return "allow" if (perm.behavior == "allow" and perm.risk == "low") else "deny"
+    if mode == ApprovalMode.FULL:
+        return "allow"
+    if perm.risk == "high":
+        return "ask"  # 不可逆/高危：即便 AUTO 也要问
+    if mode == ApprovalMode.AUTO:
+        return "deny" if perm.behavior == "deny" else "allow"
+    # ASK（默认）：沿用工具自己的判断
+    return perm.behavior

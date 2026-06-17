@@ -82,3 +82,48 @@ class Tool(Protocol, Generic[TIn]):
     ) -> ToolResult: ...
     def to_model_result(self, data: Any, tool_use_id: str) -> ToolResultBlock: ...  # 给模型
     def render_for_ui(self, data: Any) -> dict: ...  # 给 trace
+
+
+class BaseTool(Generic[TIn]):
+    """工具便捷基类：提供 fail-closed 默认 + 双重渲染默认。
+
+    子类至少设 `name` / `input_model` + 实现 `call`；按需覆盖 is_read_only 等。
+    """
+
+    name: str = ""
+    input_model: type[BaseModel]
+
+    def description(self) -> str:
+        return (self.__doc__ or self.name).strip()
+
+    # —— fail-closed 默认 ——
+    def is_read_only(self, inp: TIn) -> bool:
+        return False
+
+    def is_concurrency_safe(self, inp: TIn) -> bool:
+        return self.is_read_only(inp)
+
+    def is_destructive(self, inp: TIn) -> bool:
+        return False
+
+    async def validate_input(self, inp: TIn, ctx: "ToolContext") -> ValidationResult:
+        return ValidationResult(ok=True)
+
+    async def check_permissions(self, inp: TIn, ctx: "ToolContext") -> PermissionResult:
+        if self.is_read_only(inp):
+            return PermissionResult(behavior="allow", risk="low")
+        risk = "high" if self.is_destructive(inp) else "medium"
+        return PermissionResult(behavior="ask", risk=risk, summary=f"执行 {self.name}")
+
+    async def call(
+        self, inp: TIn, ctx: "ToolContext", on_progress: Callable[[str], None]
+    ) -> ToolResult:
+        raise NotImplementedError
+
+    def to_model_result(self, data: Any, tool_use_id: str) -> ToolResultBlock:
+        content = data if isinstance(data, str) else str(data)
+        return ToolResultBlock(tool_use_id=tool_use_id, content=content)
+
+    def render_for_ui(self, data: Any) -> dict:
+        ok_types = (str, int, float, bool, dict, list)
+        return {"result": data if isinstance(data, ok_types) else str(data)}
