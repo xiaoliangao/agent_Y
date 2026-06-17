@@ -181,6 +181,17 @@ async def test_automations_and_review_endpoints(tmp_path):
         assert (await client.delete(f"/automations/{a['id']}")).json()["ok"] is True
 
 
+async def test_sandbox_setting_selects_executor(tmp_path):
+    from core.sandbox.docker import DockerSandbox
+    from core.sandbox.local import LocalExecutor
+    from server.app import _sandbox
+
+    app = _app(tmp_path, MockProvider([]))
+    assert isinstance(_sandbox(app, str(tmp_path)), LocalExecutor)  # 默认 local
+    app.state.settings.update(sandbox="docker")
+    assert isinstance(_sandbox(app, str(tmp_path)), DockerSandbox)  # 切 docker（惰性，不连 daemon）
+
+
 async def test_assistant_scenario_selected(tmp_path):
     from server.app import _build_engine
 

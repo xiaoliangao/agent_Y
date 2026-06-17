@@ -88,6 +88,7 @@ class SettingsIn(BaseModel):
     persona: str | None = None
     default_model: str | None = None
     approval_mode: str | None = None
+    sandbox: str | None = None  # local | docker
 
 
 class AutomationIn(BaseModel):
@@ -145,6 +146,15 @@ def _active_model(app: FastAPI) -> str:
     return app.state.model
 
 
+def _sandbox(app: FastAPI, ws: str) -> Any:
+    """按设置选执行器：docker（容器隔离，需装 Docker）或 local（宿主机，开发友好）。"""
+    if app.state.settings.get().get("sandbox") == "docker":
+        from core.sandbox.docker import DockerSandbox
+
+        return DockerSandbox()
+    return LocalExecutor(ws)
+
+
 async def _run_automation(app: FastAPI, prompt: str, scenario_name: str) -> str:
     """自动化跑一次 agent（无会话、自动审批），收集助手文本作为产出。"""
     from core.obs.tracer import build_tracer
@@ -155,7 +165,7 @@ async def _run_automation(app: FastAPI, prompt: str, scenario_name: str) -> str:
     eng = SessionEngine(
         provider=_get_provider(app), tools=scenario.tools(),
         system=app.state.settings.effective_system(scenario.system_prompt()),
-        sandbox=LocalExecutor(ws), model=_active_model(app),
+        sandbox=_sandbox(app, ws), model=_active_model(app),
         approval_mode=ApprovalMode.AUTO, tracer=build_tracer(console=False),
     )
     parts: list[str] = []
@@ -224,7 +234,7 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
 
     eng = SessionEngine(
         provider=provider, tools=scenario.tools(), system=system,
-        sandbox=LocalExecutor(workspace), model=model, approval_mode=approval,
+        sandbox=_sandbox(app, workspace), model=model, approval_mode=approval,
         tracer=build_tracer(console=False), context_manager=context_manager,
         memory_store=memory_store, reflect=memory_store is not None,
     )

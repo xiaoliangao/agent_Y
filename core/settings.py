@@ -28,6 +28,7 @@ _DEFAULTS = {
     "persona": "",  # 空 = 不额外注入；UI 可用 DEFAULT_PERSONA 预填
     "default_model": "",
     "approval_mode": None,  # None = 沿用 app 默认；显式设了才覆盖。read_only|ask|auto|full
+    "sandbox": "local",  # local（宿主机跑，开发友好）| docker（容器隔离，需装 Docker）
 }
 
 
