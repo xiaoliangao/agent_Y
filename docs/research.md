@@ -24,7 +24,7 @@
 ## TL;DR（一页结论）
 
 1. **业界共识已从"调模型/调 prompt"转向"做 harness + context engineering"**：模型能力之外，**脚手架（工具集、loop、上下文管理、验证回路）决定 agent 的实际上限**。这正是 Agent Y 的内核价值，也佐证了"**手写 loop、不藏进高层 SDK、用最简单方案按需加复杂度**"的定位（Anthropic 明确这么建议）。
-2. **Memory 必须是独立的一层，不能靠大上下文窗口糊弄**——长上下文 ≠ 记忆。v1 用 **向量检索 + 结构化/文件 + "相关性·时近性·重要性"加权召回 + 阈值/事件触发反思** 即可做到可信且能长大。
+2. **Memory 必须是独立的一层，不能靠大上下文窗口糊弄**——长上下文 ≠ 记忆。v1（据 `code-study-cc.md` 实践校准）用 **markdown 文件 + frontmatter 描述 + 小模型挑 ≤5 条召回 + 环境式反思**，把"向量索引 + α/β/γ 加权"降为后置增强；重心放在"写入端该存/不该存"的过滤。
 3. **自进化 v1 别玄学**：编码场景用 Docker 测试当客观真值 → 失败归因 → 生成改进候选（改 prompt / 加 few-shot 记忆 / 调工具描述）→ **留出验证集回归，只升不降才保留、可解释可回滚** → 出 pass@1 提升曲线。DSPy/搜索/RL 留到反思遇瓶颈再上。
 4. **多 Agent 先别急**：v1 单线程 loop 最稳（Cognition）。要上多 agent，2026 收敛做法是**单一写者 + 隔离子 agent 只做"情报/分析"并回传 1–2k 摘要**（Anthropic），别让多个 agent 并发写。
 5. **本地优先 / BYOK 的现实**：Claude 原生有 compaction / tool-result clearing / memory 三个 server 端原语可直接用；但 **OpenAI 兼容端点没有等价 server 原语，这些裁剪/压缩要在我们 harness 层自己实现**——这是个明确的工程待办。
@@ -142,20 +142,58 @@
 - **cc-resourcecode**（本地，TS）：Claude Code 源码，`query.ts`=loop、`Tool.ts`/`tools.ts`=工具、`coordinator/`+`AgentTool`=子agent、`skills/`、`memdir/`——最贴近的行级学习参照。
 - 资料集：`ai-boost/awesome-harness-engineering`、`CharlesQ9/Self-Evolving-Agents`、`EvoAgentX/Awesome-Self-Evolving-Agents`。
 
+### E. OpenAI 侧补充（2026-06 复核：出处辨析 + 工程要点 + 与 Anthropic 异同）
+
+**20. "harness/loop engineering 两篇论文"的出处复核**〔高置信，多源交叉，openai.com 抓取受限处经二手确认〕
+- ✅ **harness engineering 是真的，但是 OpenAI 官方工程博客、不是 arXiv 论文**：《Harness engineering: leveraging Codex in an agent-first world》，作者 Ryan Lopopolo（OpenAI），约 2026-02，`openai.com/index/harness-engineering/`。主旨：3 工程师 5 个月用 Codex 产约 100 万行 / 1500 PR、人手写代码为零；工程师工作从"写代码"转向"设计让 agent 可靠产出的环境（harness）"。口号 **"Humans steer. Agents execute."**
+- ❌ **loop engineering 不是 OpenAI 的**：系社区术语，由 **Addy Osmani（Google）** 命名（`addyosmani.com/blog/loop-engineering/`，2026-06），凝聚的名言出自 **Boris Cherny（Anthropic，Claude Code 负责人）"Build the loop."** 与 Peter Steinberger；**概念根在 Anthropic 一侧**，勿当 OpenAI 出版物引用。
+- 血缘：context engineering（Tobi Lütke 2025-06 提出 → Anthropic 2025-09 发扬）→ harness engineering（OpenAI/Lopopolo 接着说"now it's harness engineering"）。
+
+**21. OpenAI 官方的 loop / 停止判定**〔高置信，官方 docs〕
+- run = while 循环跑到退出条件；**"final output" 判定 = 有期望类型的文本输出且本轮无工具调用**（与 code-study 发现的"只看有无 tool_use 块、别信 stop_reason"完全一致）。必设 `max_turns` 硬上限。来源：《A Practical Guide to Building Agents》(2025-04) + Agents SDK《Running agents》。
+- **主动性可调参**：要更顽强放 `<persistence>`（"完全解决前别停"），要快收手降 `reasoning_effort` + 给 early-stop 标准 + escape hatch。来源：GPT-5 / GPT-5.1 prompting guide。
+
+**22. 上下文复用：Responses API + `previous_response_id`**〔高置信，官方逐字核对〕
+- "switching to the Responses API" 使 **Tau-Bench Retail 73.9% → 78.2%**（复用上一轮 reasoning、省 CoT 重建）。来源：GPT-5 prompting guide。
+- ⚠️ 这是 OpenAI 第一方特性；**Agent Y 的 BYOK OpenAI 兼容端点不一定支持 `previous_response_id`/Responses API**——能用则用，不能则退回我们 harness 层自管历史（见 §C-19/②）。
+
+**23. 工具与缓存**〔高置信〕
+- 工具数量不是问题、**描述重叠才是**（成功案例管 15+ 不重叠工具，失败案例栽在 <10 个重叠工具）；尽量并行批量读改；**保持工具列表顺序稳定**（顺序变会让 prompt cache 失效——Codex 真实 bug）。来源：Practical Guide / GPT-5.1 / Unrolling the Codex agent loop。
+- 编码编辑用 `apply_patch`（结构化 diff），"先读→生成 diff→只 apply 一次→失败就停下报告"。来源：GPT-5.1 guide。
+
+**24. Guardrails 与审批（OpenAI 抽象更显式）**〔高置信，官方 docs〕
+- **分层防御**：LLM 判别器 + 规则 + Moderation 叠加；按"只读/写、可逆性、权限、资金影响"给工具标**风险等级**，高风险触发人工。
+- **Guardrail = 与主调用并行赛跑的独立校验器**，tripwire 命中即 raise-and-halt；用便宜模型当 guardrail 可在贵模型跑前拦截省钱。
+- **审批 = 服务端发起、暂停等回复**（Codex App Server 双向 JSON-RPC，需授权动作暂停到 allow/deny）。来源：Practical Guide / Agents SDK《Guardrails》/ Unlocking the Codex harness。
+
+**25. 单 vs 多 agent（与 Anthropic 同向）**〔高置信〕
+- **先把单 agent 榨干**再拆。两种多 agent：**Manager（agents-as-tools，中心 agent 保留控制与最终答复，`agent.as_tool()`）** vs **Handoffs（单向移交控制，handoff 实现上"就是一个 `transfer_to_x` 工具"）**。手写 loop 可复刻 handoff：检测到该 tool call 就换 system prompt/agent。来源：Practical Guide / Agents SDK《Multi-agent》《Handoffs》。
+
+**26. AGENTS.md（harness 文件工程）**〔高置信，已成开放标准〕
+- AGENTS.md = 给 agent 的 README（build/test 命令、约定、目录结构），层级优先级 + `AGENTS.override.md`，现属 Linux 基金会开放标准（OpenAI/Google/Cursor 共用）。harness engineering 实践：弃巨型手册、改约 100 行"地图" + 结构化 `docs/` 当 source of truth + CI 查新鲜度；**把 lint/test 修复指引写进错误信息回灌 agent**。来源：Codex AGENTS.md guide / agents.md / Harness engineering。
+
+**27. OpenAI vs Anthropic 异同（给 Agent Y 取舍）**〔综合〕
+- **一致**：loop 都是"工具-反馈循环 + 必设硬上限"；都"先单 agent、按需上多 agent"；都重"工具少重叠 + 描述写清"。
+- **侧重不同**：Anthropic 最旗帜鲜明**反框架/主张手写 loop**、把 context engineering 立为一级学科（Agent Y 哲学更贴它）；OpenAI 更"可调旋钮 + API 机制"（Responses API、persistence/effort 旋钮、guardrail tripwire 抽象、App Server 会话协议）。
+- **可直接搬 OpenAI 的具体机制**：(1) 退出判定"无工具调用的期望类型文本" + 硬 max_turns；(2) guardrail 并行赛跑 + tripwire + 工具风险分级 + 审批暂停门（正好喂 PRD F8.4）；(3) 多 agent 起步用 agents-as-tools 保留控制；(4) AGENTS.md 当"地图" + 错误信息回灌修复指引；(5) 工具列表顺序稳定利缓存。
+
 ---
 
 ## ② 给 Agent Y 的可落地设计建议
 
 ### Memory
-**v1 最小可信版**
-- **存储三件套**：① SQLite（结构化：会话、任务、记忆条目元数据）；② 一个**本地可跑的向量索引**（如 sqlite-vec / Chroma / FAISS，BYOK 本地优先，选轻依赖的）；③ 纯文件 `MEMORY.md`（人类可读的 notes，借 cc-resourcecode `memdir/` 的索引+详情思路）。
-- **记忆类型**：episodic（任务/会话发生的事）+ semantic（用户事实/偏好）+ procedural（常用事务沉淀的 skill）。
-- **写入**：每次任务/会话结束写 episodic；显式事实写 semantic。
-- **召回**：`α·相关性 + β·时近性 + γ·重要性`，v1 三系数=1（直接抄 Generative Agents）。
-- **反思**：编码场景用**环境式**（测试失败信号作锚）生成"经验条目"；通用场景用阈值/会话结束触发。
+
+> ⚠️ **实践校准（2026-06，源自 `docs/code-study-cc.md §6/§8`）**：通读 Claude Code 生产源码后发现，它的记忆系统**没有向量数据库、没有 `α·β·γ` 加权公式**——用的是「markdown 文件 + frontmatter 描述 + 让一个小模型挑出 ≤5 条 + 把时近性写成『47 天前保存』的人话喂给大模型」。下面 v1 建议**据此简化**：把"向量索引 + 三权重"从 v1 必选**降级为后置增强**，v1 改用"小模型挑选"。学术上的加权召回（Generative Agents，见 §①-3）仍是正确发现、作为演进期参考保留。
+
+**v1 最小可信版（按实践校准后）**
+- **存储两件套（v1）**：① 一条记忆 = 一个 markdown 文件（frontmatter `name/description/type` + 正文）；② `MEMORY.md` 常驻索引（一行一指针，设行/字节上限）。**SQLite 仅按需当 mtime/路径缓存，向量索引 v1 不做**（抄 cc-resourcecode `memdir/`）。
+- **记忆类型**：直接采用 Claude Code 四类 taxonomy——`user`（角色/偏好）/ `feedback`（工作方式指导，带 Why）/ `project`（进行中工作/决策的"为什么"）/ `reference`（外部系统指针）；提示词可借鉴（已被其 eval 反复打磨）。仍保留 episodic/semantic/procedural 作为概念映射。
+- **写入端过滤是重心**：明确"什么该存/不该存"——**不存能从代码/git 当场查到的东西**（代码模式、架构、文件路径、调试 recipe），否则会过时变误导。这条比"事后算重要性分"性价比高得多。
+- **召回（v1）**：扫各文件 frontmatter（按 mtime 倒序截断候选）→ **让一个便宜模型挑 ≤5 条**（不确定就别选）→ 读出注入，附"saved N days ago"文本由大模型自行判断陈旧性。**不调 α/β/γ 三权重**。
+- **反思 / 自动沉淀**：编码场景用**环境式**（测试失败信号作锚）；机制抄 Claude Code——每轮结束 **fork 一个受限子 agent**（只读 + 只能写 memory 目录、限 turn、与主 agent 当轮互斥、强制先查重）按 taxonomy 提炼。
 - **与自进化打通**：反思产出的"经验条目"= 自进化的 **few-shot 记忆候选**，经验证集验证后才并入。
 
-**演进路径**：A-MEM 式结构化笔记 + 写入时更新旧记忆 → 跨会话 progress 文件 + git（借 long-running harness）→ 记忆量大再上 H-MEM 分层路由。
+**演进路径**：v1 文件 + 小模型挑选 → 记忆量变大、挑选不准时再上**向量索引召回**（sqlite-vec/Chroma）与 `α·相关性+β·时近性+γ·重要性` 加权（Generative Agents 式）→ A-MEM 式写入时更新旧记忆 → H-MEM 分层路由。
 **坑**：① 别用长上下文替代记忆层；② JIT 用混合（少量预载 + 按需检索）；③ 保持系统提示/工具列表前缀稳定，利于 prompt cache。
 
 ### 自进化闭环
@@ -171,12 +209,15 @@
 
 ### Loop & Harness（M1）
 - **结构**：单线程 **act-observe** loop（v1 先单线程最稳）；子 agent 留演进期，且遵守"单写者 + 隔离子 agent 只回传摘要"。
-- **停止**：`max_steps` + token/预算 + `end_turn`，多重保险防死循环。
-- **错误恢复**：工具失败回灌 `is_error` 让模型自调整；设重试上限。
+- **停止/退出判定**：**主信号 = 本轮有无 tool_use 块**（无工具调用 + 文本达预期 → 完成）；**别只信 stop_reason**（code-study 与 OpenAI Practical Guide/Agents SDK 双重佐证，§C-21/§8）。再叠 `max_turns` 硬上限 + token/预算多重保险防死循环。
+- **错误恢复**：工具失败回灌 `is_error` 让模型自调整（错误即消息、不抛异常中断 loop）；设重试上限。
 - **ground truth + self-verify**：Docker 跑测试 = 每步真值；要求"测试通过才算完成"。
-- **上下文/工具结果管理**：v1 可先全保留；长了再做 tool-result clearing（参照 Claude 默认 trigger 100k / keep 3）。⚠️ **OpenAI 兼容端点要在 harness 层自实现这套**（无 server 原语）。
-- **context engineering**：系统提示稳定（缓存友好）；工具描述写"**何时用**"而非只"做什么"；JIT 混合加载。
-- **对照 cc-resourcecode/query.ts**：借鉴其 loop 主循环、工具分发、子 agent fork、memdir；v1 砍到最小。（⚠️ 需做一次 query.ts 代码走读才能给行级"哪段抄/哪段简化"——见待补。）
+- **上下文/工具结果管理**：v1 可先全保留；长了再做 tool-result clearing + 完整压缩。⚠️ **OpenAI 兼容端点无 server 原语，全在 harness 层自实现**——配方见 `code-study-cc.md §2`（effective 窗口−13k 触发 / 工具结果换占位串 KEEP_RECENT=5 / 9 段式摘要 / 保留≥10k且≥5条上限40k不切断配对）。能用第一方 Responses API/`previous_response_id` 复用推理则用（Tau-Bench +4.3pt，§C-22），不能则退回自管历史。
+- **context engineering**：系统提示 + **工具列表顺序稳定**（缓存友好，§C-23）；工具描述写"**何时用**"而非只"做什么"，且少重叠；JIT 混合加载。
+- **guardrails / 审批（喂 PRD F8.4）**：并行赛跑的独立校验器 + tripwire 即停 + 工具按只读/可逆/权限/资金**风险分级** + 高风险审批暂停门（§C-24）。
+- **多 agent 起步形态**：先 **agents-as-tools（manager 保留控制）**，需会话级移交再上 handoff（handoff 实现上=一个 `transfer_to_x` 工具，§C-25）。
+- **AGENTS.md 当"地图"**：约 100 行目录 + 结构化 `docs/` 当 source of truth；**把 lint/测试修复指引写进错误信息回灌上下文**（§C-26）。
+- **对照 cc-resourcecode/query.ts**：✅ 已完成行级走读，见 `docs/code-study-cc.md`（loop/压缩/工具/子agent/技能/记忆 6 子系统 + §7 v1 借鉴清单）。
 
 ### 模块划分（对齐 PRD/design）
 `core`（loop·llm/provider·tool·types）· `memory`（store·recall·reflection）· `obs`（tracer→Langfuse）· `eval`（harness·improve）· `sandbox`（docker）· `scenarios`（coding 先）。
@@ -210,6 +251,11 @@
 | Don't build multi-agents / When multi-agents work | Cognition 2025–26 | 多 agent 争论与 2026 收敛（单写者+情报型子agent） |
 | Context Rot | Chroma | 上下文越长越退化的实测 |
 | Claude docs: context-editing / compaction / prompt-caching + 工程 cookbook | Anthropic | **原生上下文管理原语 + 参数默认值**（Claude 侧直接可用） |
+| A Practical Guide to Building Agents (PDF) | OpenAI 2025-04 | loop 退出条件 / 工具三类 / guardrails / manager vs handoff |
+| GPT-5 & GPT-5.1 prompting guide | OpenAI 2025 | 主动性旋钮(persistence/effort) / Responses API 复用推理(+Tau-Bench) / apply_patch |
+| Agents SDK docs（running/handoffs/guardrails/sessions/multi-agent） | OpenAI | loop/handoff/guardrail tripwire/session 钩子的权威定义 |
+| Harness engineering（Lopopolo）/ Unrolling the Codex agent loop / Unlocking the Codex harness | OpenAI 2026-02 | harness 实践 / Codex 真实 loop / 缓存与压缩 / App Server 会话协议(thread·turn·item)·审批暂停。⚠️ openai.com 抓取受限，措辞以原页为准 |
+| AGENTS.md 标准（agents.md，Linux 基金会） | 开放标准 | 给 agent 的"地图"文件规范 |
 
 ### 代码参考（⚠️ star/活跃度/上手难易未独立核实，落地前自查 GitHub）
 | repo | 语言 | 用处 |
@@ -233,13 +279,15 @@
 - 自进化的 Reflexion/Self-Refine/DSPy/ADAS 等**仅综述级确认**，未逐篇逐字核验。
 
 **待补（建议在写 `design.md` 时各补一轮快速核实）**
-1. **OpenAI 兼容端点下如何自实现 compaction / tool-result clearing / memory**（无 server 原语时，客户端裁剪阈值 + prompt-cache 友好前缀策略）。← 最影响 BYOK 架构。
-2. **具体开源记忆库选型**（mem0 / Zep·Graphiti / Cognee / LangMem / Letta 的架构差异、是否 Python、star/活跃度、上手难易）——决定 v1 记忆是自写还是复用。
-3. **cc-resourcecode `query.ts` 代码走读**：给"哪段照抄、哪段简化为 v1"的行级建议。
+1. ✅ **已完成** — **OpenAI 兼容端点下如何自实现 compaction / tool-result clearing / memory**：见 `code-study-cc.md §2`（带默认数值的完整配方）。← 最影响 BYOK 架构。
+2. **具体开源记忆库选型**（mem0 / Zep·Graphiti / Cognee / LangMem / Letta 的架构差异、是否 Python、star/活跃度、上手难易）——决定 v1 记忆是自写还是复用。⚠️ 优先级下降：code-study 证明纯文件方案够用，向量库后置。
+3. ✅ **已完成** — **cc-resourcecode 代码走读**：见 `code-study-cc.md`（不止 query.ts，扩展到 6 子系统 + 行级借鉴/忽略清单）。
 4. **Langfuse trace 如何反哺自进化闭环**（trace → eval 样本的 schema 映射）。
 5. **系统提示/工具描述"何时用"模板 + prompt 注入/上下文中毒防护**的可抄示例。
-6. **tool search / 渐进披露**在工具多时的检索机制与开销。
+6. ✅ **部分完成** — **tool search / 渐进披露**：工具侧 + 技能侧机制见 `code-study-cc.md §3/§5`；剩"工具数巨大时的开销基准"待测。
+
+**出处复核（2026-06）**：用户问的"OpenAI harness / loop engineering 两篇论文"已查实——**harness engineering 真**（OpenAI 工程博客 by Lopopolo，非 arXiv 论文，§E-20）；**loop engineering 非 OpenAI**（Addy Osmani/Google 命名，概念根在 Anthropic，§E-20）。
 
 ---
 
-*本报告由两轮 deep-research（A: 104 agent / B: 107 agent，合计 ~400 万 token、48 来源、50 条经核对结论）合成。原始产物存于会话 task 输出。*
+*本报告由两轮 deep-research（A: 104 agent / B: 107 agent，合计 ~400 万 token、48 来源、50 条经核对结论）合成；2026-06 追加 OpenAI 侧复核轮（§E，查实 harness/loop 出处 + 官方工程要点）与 `code-study-cc.md`（Claude Code 源码走读，校准了 Memory v1 配方）。原始产物存于会话 task 输出。*
