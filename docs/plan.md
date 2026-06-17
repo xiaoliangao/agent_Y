@@ -1,6 +1,6 @@
 # 通用个人 Agent Runtime — 落地计划（编码 + 日常事务双能力，Hermes 式）
 
-> 状态：选题已定 · 环境/仓库已就绪（Phase 0 完成）· 下一站 **M1**。
+> 📌 **历史文档**：本文是早期落地计划，**已被 [`PRD.md`](./PRD.md)（需求）+ [`design.md`](./design.md)（设计）取代**。其架构思想/里程碑/自进化闭环设计仍有参考价值，但语言/接口/第一周清单等细节已过时，**勿据本文施工**；保留作历史与思路参考。
 > 仓库：`git@github.com:xiaoliangao/agent_Y.git`（工作目录 `/home/ubuntu/coding_agent`）。
 
 > ⚠️ **技术栈/形态以 [`docs/PRD.md`](./PRD.md) 为准**：经产品讨论已确定 **Python 运行时 + 多 Provider 原生适配(BYOK) + macOS 桌面 GUI(pywebview + Web 前端, 首屏 chat+trace)**，取代本文下方早期的 TypeScript 假设。本文的**架构思想、里程碑、Eval 自进化闭环设计仍然有效**，但**语言相关的代码骨架（§2 技术栈、§3.2 接口示例、§5 第一周清单）将按 Python 同步重写**（待办）。
