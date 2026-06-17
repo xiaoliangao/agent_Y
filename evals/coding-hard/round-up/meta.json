@@ -1,0 +1,4 @@
+{
+  "prompt": "实现 rounding.py 里的 round_to_int(x)：把一个非负浮点数四舍五入到最近的整数。让测试通过。",
+  "test_cmd": "python3 -m pytest -q"
+}

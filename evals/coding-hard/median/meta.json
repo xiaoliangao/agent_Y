@@ -1,0 +1,4 @@
+{
+  "prompt": "实现 stats.py 里的 median(nums)：返回一个非空数字列表的中位数。让测试通过。",
+  "test_cmd": "python3 -m pytest -q"
+}
