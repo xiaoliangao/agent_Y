@@ -16,6 +16,7 @@ import uuid
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -138,6 +139,10 @@ async def _event_stream(app: FastAPI, sid: str, engine: SessionEngine, text: str
 def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: str | None = None,
                model: str | None = None, approval_mode: ApprovalMode = ApprovalMode.ASK) -> FastAPI:
     app = FastAPI(title="Agent Y", version="0.1.0")
+    # 本地单用户：放开 CORS，便于前端 dev server(另一端口) 直连。生产同源(pywebview)时无所谓。
+    app.add_middleware(
+        CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    )
     data_dir = data_dir or ".agenty"
     app.state.store = Store(db_path or os.path.join(data_dir, "agenty.db"))
     app.state.provider = provider
