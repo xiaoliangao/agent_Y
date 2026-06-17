@@ -25,8 +25,10 @@ class LocalExecutor:
         self, cmd: list[str], cwd: str, timeout: int, network: bool = False
     ) -> ExecResult:
         workdir = self._resolve(cwd) if cwd and cwd != "." else self.root
+        # PYTHONDONTWRITEBYTECODE：避免"改文件后同秒重跑测试时用到旧 .pyc 缓存"的坑
+        env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=workdir,
+            *cmd, cwd=workdir, env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         try:

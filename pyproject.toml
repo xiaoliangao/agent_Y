@@ -32,6 +32,7 @@ include = ["core*", "server*", "cli*"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 asyncio_mode = "auto"
+testpaths = ["tests"]  # 只收 tests/；examples/ 里有故意失败的样例
 
 [tool.ruff]
 line-length = 100
