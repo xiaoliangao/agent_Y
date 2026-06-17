@@ -1,37 +1,75 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Instrument Serif", ui-serif, Georgia, serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* 暖灰近黑 + 暖金强调 —— 沉静、私人、克制 */
+  --color-bg: #0c0c0e;
+  --color-panel: #141416;
+  --color-elevated: #1b1b1f;
+  --color-line: #25252b;
+  --color-line-2: #34343c;
+  --color-ink: #ededee;
+  --color-ink-2: #a6a6ad;
+  --color-ink-3: #6c6c74;
+  --color-gold: #d6a866;
+  --color-gold-2: #e7bd80;
+  --color-danger: #e0796a;
+  --color-ok: #7fb791;
 }
 
+* { border-color: var(--color-line); }
+
+html, body, #root { height: 100%; }
 body {
-  @apply bg-[#FAFAFC] text-gray-900;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* 顶部一抹暖光，避免纯色发闷 */
+  background-image:
+    radial-gradient(900px 500px at 78% -8%, rgba(214,168,102,0.06), transparent 60%),
+    radial-gradient(700px 400px at 10% 110%, rgba(214,168,102,0.03), transparent 55%);
+  background-attachment: fixed;
 }
 
-/* Elegant minimalist scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  @apply bg-gray-200 rounded-full border-2 border-white;
-}
-::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-300;
-}
+::selection { background: rgba(214,168,102,0.28); }
 
-/* Hide scrollbar for clean internal areas but keep functionality */
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-line-2); border-radius: 9px; border: 3px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #45454e; background-clip: padding-box; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+textarea, input { font-family: inherit; }
+
+/* 通用元件 */
+.card { background: var(--color-panel); border: 1px solid var(--color-line); border-radius: 14px; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border-radius: 10px;
+  font-weight: 500; font-size: 13px; padding: 8px 14px; transition: all .15s ease;
+  border: 1px solid transparent; cursor: pointer; }
+.btn-ghost { color: var(--color-ink-2); }
+.btn-ghost:hover { color: var(--color-ink); background: rgba(255,255,255,0.04); }
+.btn-outline { color: var(--color-ink); border-color: var(--color-line-2); background: var(--color-elevated); }
+.btn-outline:hover { border-color: #45454e; }
+.btn-gold { background: var(--color-gold); color: #1a1408; font-weight: 600; }
+.btn-gold:hover { background: var(--color-gold-2); }
+.btn-gold:disabled { opacity: .4; cursor: not-allowed; }
+
+.field { width: 100%; background: var(--color-bg); border: 1px solid var(--color-line-2); border-radius: 10px;
+  padding: 10px 12px; font-size: 13.5px; color: var(--color-ink); outline: none; transition: border-color .15s; }
+.field::placeholder { color: var(--color-ink-3); }
+.field:focus { border-color: var(--color-gold); }
+
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--color-ink-3); font-weight: 600; }
+
+/* 进入动效（克制） */
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise .4s cubic-bezier(.2,.7,.3,1) both; }
+@keyframes blink { 0%,100% { opacity: .25; } 50% { opacity: 1; } }
