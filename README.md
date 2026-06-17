@@ -24,6 +24,8 @@
 | [`docs/design.md`](docs/design.md) | **系统设计**：架构、**§4 接口契约**（前后端 REST+SSE / Provider / Tool / Sandbox / Memory）、数据模型、M1 拆解。两人协作的冻结面 |
 | [`docs/research.md`](docs/research.md) | **调研**：memory / 自进化 / harness·loop·context engineering 业界做法 + OpenAI 侧复核 + 术语表，带引用 |
 | [`docs/code-study-cc.md`](docs/code-study-cc.md) | **源码借鉴**：Claude Code 6 子系统行级走读 + Agent Y 借鉴/忽略清单 |
+| [`docs/dev-setup.md`](docs/dev-setup.md) | **开发/运行指南**：安装、跑测试、CLI、**Docker 沙箱**、排错、协作约定 |
+| [`docs/m1-issues.md`](docs/m1-issues.md) | M1 任务清单（13 项，可转 GitHub Issues）|
 | [`docs/plan.md`](docs/plan.md) | 早期落地计划，**已被 PRD/design 取代**，留作历史参考 |
 
 ## 快速开始（M1）

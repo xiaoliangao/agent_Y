@@ -6,6 +6,8 @@
 >
 > 标签建议：`M1` `area:core` / `area:tools` / `area:infra` / `good-first` 等。负责 A=作者（Agent 内核），B=同事（基础设施/工具），详见 `design.md §8.4`。
 
+> **实现状态（2026-06-17）**：M1 已基本实现，**28 个测试通过**（离线全覆盖 + **Docker 沙箱真机验证** #7）。待用真 `ANTHROPIC_API_KEY` 实跑验收 #3。环境与运行见 `docs/dev-setup.md`。
+
 ## 共同第一步（开工前）
 **[M1] 冻结 §4 接口契约**（Issue #2）— 两人一起过一遍 `design.md §4` 的 5 组 Protocol（已在 `core/*/base.py` 落成桩），确认签名 → 合并。之后改契约走 `[contract]` PR + 双确认。
 

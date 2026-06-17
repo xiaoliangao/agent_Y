@@ -31,3 +31,5 @@ agenty run "<任务>"         # 跑 CLI（M1 目标）
 
 ## 当前阶段
 **阶段③ 编码（M1）**。任务见 `docs/m1-issues.md`。M1 验收：CLI 给编码任务 → Docker 沙箱把失败测试改绿、写操作先确认。分工见 `docs/design.md §8.4`。
+
+**环境/安装/Docker/排错见 `docs/dev-setup.md`**。Docker 沙箱已在本机实测可用（`pytest tests/test_docker_sandbox.py`）。
