@@ -2,13 +2,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Plus, Settings as SettingsIcon, Code2, Briefcase, ArrowUp, Check, X,
-  AlertTriangle, Activity, MessageSquare, KeyRound,
+  AlertTriangle, Activity, MessageSquare, KeyRound, Clock,
 } from 'lucide-react';
 import {
   createSession, listSessions, getSessionMessages, streamMessage, postApproval,
-  listProviders, getSettings, type Frame, type SessionSummary, type Connection,
+  listProviders, getSettings, listReviews, type Frame, type SessionSummary, type Connection,
 } from './api';
 import SettingsPanel from './Settings';
+import AutomationsPanel from './Automations';
 
 type Msg = { id: string; role: 'user' | 'assistant'; content: string };
 type Step = { id: string; label: string; target?: string; status: 'running' | 'done' | 'error' };
@@ -66,6 +67,8 @@ export default function App() {
   const [approval, setApproval] = useState<Approval | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showAutos, setShowAutos] = useState(false);
+  const [pendingReviews, setPendingReviews] = useState(0);
   const [conns, setConns] = useState<Connection[]>([]);
   const [agentName, setAgentName] = useState('Agent Y');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -75,6 +78,7 @@ export default function App() {
   const refreshConfig = () => {
     listProviders().then(setConns).catch(() => {});
     getSettings().then((d) => setAgentName(d.settings.agent_name || 'Agent Y')).catch(() => {});
+    listReviews('pending').then((r) => setPendingReviews(r.length)).catch(() => {});
   };
   useEffect(() => { refreshThreads(); refreshConfig(); }, []);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [messages, trace, running]);
@@ -152,7 +156,11 @@ export default function App() {
           })}
         </div>
 
-        <div className="p-3" style={{ borderTop: '1px solid var(--color-line)' }}>
+        <div className="p-3 space-y-0.5" style={{ borderTop: '1px solid var(--color-line)' }}>
+          <button onClick={() => setShowAutos(true)} className="btn btn-ghost w-full justify-start">
+            <Clock className="w-4 h-4" /> 自动化
+            {pendingReviews > 0 && <span className="ml-auto px-1.5 rounded-full text-[10px] font-semibold" style={{ background: 'var(--color-gold)', color: '#fff7f1' }}>{pendingReviews}</span>}
+          </button>
           <button onClick={() => setShowSettings(true)} className="btn btn-ghost w-full justify-start"><SettingsIcon className="w-4 h-4" /> 设置</button>
         </div>
       </aside>
@@ -282,6 +290,9 @@ export default function App() {
 
       <AnimatePresence>
         {showSettings && <SettingsPanel onClose={() => { setShowSettings(false); refreshConfig(); }} />}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showAutos && <AutomationsPanel onClose={() => { setShowAutos(false); refreshConfig(); }} />}
       </AnimatePresence>
     </div>
   );

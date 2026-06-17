@@ -214,6 +214,12 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                   <Dropdown value={settings.approval_mode || 'ask'} options={APPROVALS} onChange={(v) => save({ approval_mode: v })} />
                 </div>
               </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <div className="label mb-2">代码沙箱</div>
+                  <Dropdown value={settings.sandbox || 'local'} options={[{ v: 'local', label: '本机（开发友好）' }, { v: 'docker', label: 'Docker（隔离，需装 Docker）' }]} onChange={(v) => save({ sandbox: v })} />
+                </div>
+              </div>
             </div>
           )}
         </div>

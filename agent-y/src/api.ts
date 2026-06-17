@@ -26,7 +26,8 @@ export interface ModelInfo {
   supports_tools: boolean; supports_thinking: boolean; price_in: number; price_out: number;
 }
 export interface Settings {
-  agent_name: string; persona: string; default_model: string; approval_mode: string | null;
+  agent_name: string; persona: string; default_model: string;
+  approval_mode: string | null; sandbox?: string;
 }
 export interface Todo { id: string; text: string; done: boolean; due?: string | null; created_at: string; }
 export interface Folder { id: string; path: string; mode: string; }
@@ -73,6 +74,24 @@ export const deleteTodo = (id: string) => j(`/todos/${id}`, { method: "DELETE" }
 export const listFolders = () => j<{ folders: Folder[] }>("/folders").then((d) => d.folders ?? []).catch(() => []);
 export const addFolder = (path: string, mode = "read_write") => post("/folders", { path, mode });
 export const deleteFolder = (id: string) => j(`/folders/${id}`, { method: "DELETE" });
+
+// ---------- 定时自动化 + 待审队列 ----------
+export interface Automation {
+  id: string; name: string; schedule: string; prompt: string; scenario: string;
+  enabled: boolean; last_run?: string | null; created_at: string;
+}
+export interface Review {
+  id: string; automation_id: string; title: string; output: string; status: string; created_at: string;
+}
+export const listAutomations = () => j<{ automations: Automation[] }>("/automations").then((d) => d.automations ?? []).catch(() => []);
+export const addAutomation = (a: { name: string; schedule: string; prompt: string; scenario?: string }) => post("/automations", a);
+export const patchAutomation = (id: string, patch: Partial<Automation>) =>
+  j(`/automations/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
+export const deleteAutomation = (id: string) => j(`/automations/${id}`, { method: "DELETE" });
+export const runAutomation = (id: string) => post(`/automations/${id}/run`) as Promise<Review>;
+export const listReviews = (status?: string) =>
+  j<{ reviews: Review[] }>(`/review-queue${status ? `?status=${status}` : ""}`).then((d) => d.reviews ?? []).catch(() => []);
+export const decideReview = (id: string, decision: "accept" | "discard") => post(`/review-queue/${id}`, { decision });
 
 // 发消息并逐帧消费 SSE（text/event-stream）。
 export async function* streamMessage(sid: string, text: string): AsyncGenerator<Frame> {
