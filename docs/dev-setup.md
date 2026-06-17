@@ -54,6 +54,18 @@ python -m cli.main run "<任务>" --provider openai --base-url https://api.deeps
 
 > 若 SDK 对 `thinking`/`output_config` 参数报错：`core/providers/anthropic.py` 里 M1 默认**关** thinking，可按你的 anthropic SDK 版本微调（见该文件注释）。
 
+## 5.5 运行后端 server（M2，前端 `agent-y/` 将接它）
+```bash
+# 用环境变量配置 provider（以 DeepSeek 为例）
+export AGENTY_PROVIDER=openai
+export AGENTY_BASE_URL=https://api.deepseek.com
+export AGENTY_MODEL=deepseek-chat
+export AGENTY_KEY_ENV=DEEPSEEK_API_KEY
+export DEEPSEEK_API_KEY=sk-...
+uvicorn server.app:app --host 127.0.0.1 --port 8765
+```
+关键端点（详见 `design.md §4.1`）：`POST /sessions` · `POST /sessions/{id}/messages`（**SSE 流**：text_delta / tool_use / tool_result / approval_request / done）· `POST /approvals/{id}` · `GET /sessions` · `GET /health`。审批：写/危险操作发 `approval_request` 并暂停，前端 `POST /approvals/{id}` 恢复。
+
 ## 6. Docker 沙箱说明（`core/sandbox/docker.py`）
 - **镜像**：默认 `python:3.12-slim`。首次用前建议手动拉一次：`docker pull python:3.12-slim`。
 - **隔离**：每个 `DockerSandbox` 起一个容器，**默认关网络**（`network_disabled=True`）、限 CPU/内存（默认 1 cpu / 512m）；`close()` 会删容器。
