@@ -21,6 +21,7 @@ import sys
 import tempfile
 
 from core.engine import SessionEngine
+from core.eval.compare import compare_models
 from core.eval.harness import run_taskset
 from core.eval.improve import evolve
 from core.eval.taskset import load_taskset
@@ -203,6 +204,26 @@ async def _improve(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _compare(args: argparse.Namespace) -> int:
+    try:
+        provider = _build_provider(args)
+    except RuntimeError as e:
+        print(f"⚠️  {e}", file=sys.stderr)
+        return 1
+    tasks = load_taskset(args.taskset)
+    if not tasks:
+        print(f"任务集为空: {args.taskset}", file=sys.stderr)
+        return 2
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    sc = CodingScenario()
+    print(f"对比 {len(models)} 个模型 @ {args.taskset}（各跑 {len(tasks)} 任务）…")
+    rows = await compare_models(tasks, models, provider=provider, system=sc.system_prompt(), tools=sc.tools())
+    print("\n模型对比（按 pass@1 降序）:")
+    for r in rows:
+        print(f"  {r['model']:26} pass@1={r['pass_rate'] * 100:>3.0f}%  ({r['n']} 任务)  {r['latency_s']}s")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="agenty", description="Agent Y CLI")
     sub = p.add_subparsers(dest="cmd")
@@ -227,6 +248,11 @@ def main(argv: list[str] | None = None) -> int:
     ip.add_argument("--rounds", type=int, default=2, help="自进化轮数（默认 2）")
     _add_provider_args(ip)
 
+    cp = sub.add_parser("compare", help="同任务集对比多个模型（通过率/延迟）")
+    cp.add_argument("--taskset", required=True, help="任务集目录")
+    cp.add_argument("--models", required=True, help="逗号分隔模型 id，如 deepseek-chat,deepseek-reasoner")
+    _add_provider_args(cp)
+
     args = p.parse_args(argv)
     if args.cmd == "run":
         return asyncio.run(_run(args))
@@ -234,6 +260,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_eval(args))
     if args.cmd == "improve":
         return asyncio.run(_improve(args))
+    if args.cmd == "compare":
+        return asyncio.run(_compare(args))
     p.print_help()
     return 0
 
