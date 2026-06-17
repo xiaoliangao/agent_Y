@@ -1,7 +1,12 @@
 """ContextManager：估算/阈值/工具结果清理/完整压缩/保留配对/熔断。见 design §5。"""
 from __future__ import annotations
 
-from core.harness.context import ContextManager, _strip_analysis, estimate_tokens
+from core.harness.context import (
+    ContextManager,
+    _strip_analysis,
+    context_window_for,
+    estimate_tokens,
+)
 from core.providers.mock import MockProvider, script_text
 from core.types import Message, TextBlock, ToolResultBlock, ToolUseBlock
 
@@ -22,6 +27,13 @@ def _tool_result(tid: str, content: str = "output") -> Message:
 
 def test_estimate_grows_with_text():
     assert estimate_tokens([_user("x" * 4000)]) > estimate_tokens([_user("hi")])
+
+
+def test_context_window_for():
+    assert context_window_for("deepseek-chat") == 64_000
+    assert context_window_for("claude-sonnet-4-6") == 200_000
+    assert context_window_for("gpt-4o") == 128_000
+    assert context_window_for("unknown") == 128_000
 
 
 def test_thresholds():
@@ -92,8 +104,9 @@ class _BadProvider:
     name = "bad"
 
     async def stream(self, **_kwargs):
-        raise RuntimeError("boom")
-        yield  # noqa: 让它是 async generator
+        if True:  # 让函数体含 yield → 成为 async generator，但调用即抛
+            raise RuntimeError("boom")
+        yield
 
     def count_tokens(self, _messages):
         return None

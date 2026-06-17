@@ -114,3 +114,26 @@ async def test_404_and_error_envelope(tmp_path):
 async def test_health(tmp_path):
     async with _client(_app(tmp_path, MockProvider([]))) as client:
         assert (await client.get("/health")).json()["ok"] is True
+
+
+async def test_engine_wires_memory_and_context(tmp_path):
+    from server.app import _build_engine
+
+    app = _app(tmp_path, MockProvider([]))
+    sid = app.state.store.create_session(title="t", scenario="coding")["id"]
+    eng = _build_engine(app, sid)
+    assert eng.context_manager is not None  # 压缩始终开
+    assert eng.memory_store is not None and eng.reflect is True  # 记忆默认开
+
+
+async def test_memory_can_be_disabled(tmp_path):
+    from server.app import _build_engine
+
+    app = create_app(
+        provider=MockProvider([]), db_path=str(tmp_path / "db"),
+        data_dir=str(tmp_path / "d"), memory=False,
+    )
+    sid = app.state.store.create_session(title="t", scenario="coding")["id"]
+    eng = _build_engine(app, sid)
+    assert eng.memory_store is None and eng.reflect is False
+    assert eng.context_manager is not None

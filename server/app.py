@@ -80,9 +80,24 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
     scenario = CodingScenario()
     workspace = os.path.join(app.state.data_dir, "sessions", sid, "workspace")
     os.makedirs(workspace, exist_ok=True)
+    provider = _get_provider(app)
+    # 上下文压缩（始终开，便宜）+ 长期记忆（按 app.state.memory_enabled，跨会话共享）
+    from core.harness.context import ContextManager, context_window_for
+
+    context_manager = ContextManager(
+        provider=provider, model=app.state.model, context_window=context_window_for(app.state.model)
+    )
+    memory_store = None
+    if app.state.memory_enabled:
+        from core.memory.store import FileMemoryStore
+
+        memory_store = FileMemoryStore(
+            os.path.join(app.state.data_dir, "memory"), provider=provider, model=app.state.model
+        )
     eng = SessionEngine(
-        provider=_get_provider(app), tools=scenario.tools(), system=scenario.system_prompt(),
+        provider=provider, tools=scenario.tools(), system=scenario.system_prompt(),
         sandbox=LocalExecutor(workspace), model=app.state.model, approval_mode=app.state.approval_mode,
+        context_manager=context_manager, memory_store=memory_store, reflect=memory_store is not None,
     )
     eng.messages = [Message.model_validate(m) for m in app.state.store.get_messages(sid)]
     return eng
@@ -136,7 +151,8 @@ async def _event_stream(app: FastAPI, sid: str, engine: SessionEngine, text: str
 
 
 def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: str | None = None,
-               model: str | None = None, approval_mode: ApprovalMode = ApprovalMode.ASK) -> FastAPI:
+               model: str | None = None, approval_mode: ApprovalMode = ApprovalMode.ASK,
+               memory: bool | None = None) -> FastAPI:
     app = FastAPI(title="Agent Y", version="0.1.0")
     # 本地单用户：放开 CORS，便于前端 dev server(另一端口) 直连。生产同源(pywebview)时无所谓。
     app.add_middleware(
@@ -148,6 +164,9 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
     app.state.model = model or os.environ.get("AGENTY_MODEL", "claude-sonnet-4-6")
     app.state.data_dir = data_dir
     app.state.approval_mode = approval_mode
+    app.state.memory_enabled = (
+        memory if memory is not None else os.environ.get("AGENTY_MEMORY", "on") != "off"
+    )
     app.state.approvals = {}   # approval_id -> Future
     app.state.runs = {}        # sid -> {task, engine}
 

@@ -77,12 +77,30 @@ async def _run(args: argparse.Namespace) -> int:
 
     scenario = CodingScenario()
     approval_mode = ApprovalMode.AUTO if args.yes else ApprovalMode.ASK
+    transcript_path = os.path.join(workspace, "transcript.jsonl")
 
     async def ask(perm) -> bool:
         def _prompt() -> str:
             return input(f"\n⚠️  允许「{perm.summary or '该操作'}」? 风险={perm.risk} [y/N] ").strip().lower()
 
         return (await asyncio.to_thread(_prompt)) in ("y", "yes")
+
+    # 上下文压缩（默认开）：长会话调模型前自动微压缩/摘要
+    context_manager = None
+    if not args.no_compact:
+        from core.harness.context import ContextManager, context_window_for
+
+        context_manager = ContextManager(
+            provider=provider, model=args.model,
+            context_window=context_window_for(args.model), transcript_path=transcript_path,
+        )
+    # 长期记忆（默认开，跨会话）：召回注入 + 结束反思沉淀
+    memory_store = None
+    if not args.no_memory:
+        from core.memory.store import FileMemoryStore
+
+        mem_dir = args.memory_dir or os.path.expanduser("~/.agenty/memory")
+        memory_store = FileMemoryStore(mem_dir, provider=provider, model=args.model)
 
     engine = SessionEngine(
         provider=provider,
@@ -92,10 +110,17 @@ async def _run(args: argparse.Namespace) -> int:
         model=args.model,
         approval_mode=approval_mode,
         request_approval=ask,
-        transcript_path=os.path.join(workspace, "transcript.jsonl"),
+        transcript_path=transcript_path,
+        context_manager=context_manager,
+        memory_store=memory_store,
+        reflect=memory_store is not None,
     )
 
-    print(f"workspace: {workspace}\nprovider: {args.provider} · model: {args.model} · sandbox: {args.sandbox}\n")
+    mem_note = "on" if memory_store else "off"
+    print(
+        f"workspace: {workspace}\nprovider: {args.provider} · model: {args.model} · "
+        f"sandbox: {args.sandbox} · memory: {mem_note}\n"
+    )
     reason = "error"
     streaming = False  # 是否正在逐字打印一段助手文本
     async for ev in engine.submit(args.task):
@@ -180,6 +205,9 @@ def main(argv: list[str] | None = None) -> int:
     _add_provider_args(rp)
     rp.add_argument("--sandbox", choices=["local", "docker"], default="local")
     rp.add_argument("--yes", action="store_true", help="自动放行写/危险操作（审批=AUTO）")
+    rp.add_argument("--no-memory", action="store_true", help="关闭长期记忆（默认开，跨会话召回+反思）")
+    rp.add_argument("--no-compact", action="store_true", help="关闭上下文压缩（默认开）")
+    rp.add_argument("--memory-dir", help="记忆目录（默认 ~/.agenty/memory）")
 
     ep = sub.add_parser("eval", help="跑任务集出 pass@1")
     ep.add_argument("--taskset", required=True, help="任务集目录，如 evals/coding-v1")
