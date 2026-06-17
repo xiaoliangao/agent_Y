@@ -15,9 +15,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable
 
+from core.obs.tracer import summarize
 from core.tools.base import Tool, ToolContext
 from core.tools.registry import run_tools
 from core.types import Message, TextBlock, ThinkingBlock, ToolUseBlock
+
+
+def _assistant_text(msg: Message) -> str:
+    return " ".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
 
 
 @dataclass
@@ -99,27 +104,33 @@ async def agent_loop(
         if on_before_turn is not None:
             messages[:] = await on_before_turn(messages)  # 就地替换，保持调用方引用有效
 
-        assistant_msg: Message | None = None
-        tool_uses: list[ToolUseBlock] = []
-        async for ev in _stream_model_turn(
-            provider, system, messages, tools_schema, model, max_tokens, ctx.abort
-        ):
-            if ev.kind == "assistant" and ev.message is not None:
-                assistant_msg = ev.message
-                tool_uses = [b for b in ev.message.content if b.type == "tool_use"]
-            yield ev
+        with ctx.tracer.span("turn", kind="turn", n=turn) as turn_span:
+            assistant_msg: Message | None = None
+            tool_uses: list[ToolUseBlock] = []
+            with ctx.tracer.span("llm", kind="llm", model=model) as llm_span:
+                async for ev in _stream_model_turn(
+                    provider, system, messages, tools_schema, model, max_tokens, ctx.abort
+                ):
+                    if ev.kind == "assistant" and ev.message is not None:
+                        assistant_msg = ev.message
+                        tool_uses = [b for b in ev.message.content if b.type == "tool_use"]
+                        llm_span.set(
+                            tools=len(tool_uses), output=summarize(_assistant_text(ev.message))
+                        )
+                    yield ev
 
-        if assistant_msg is not None:
-            messages.append(assistant_msg)
+            if assistant_msg is not None:
+                messages.append(assistant_msg)
 
-        if not tool_uses:  # 唯一的"自然结束"信号：模型没要工具
-            yield LoopEvent("done", reason="completed")
-            return
+            if not tool_uses:  # 唯一的"自然结束"信号：模型没要工具
+                yield LoopEvent("done", reason="completed")
+                return
 
-        results = await run_tools(tool_uses, by_name, ctx)
-        tr_msg = Message(role="user", content=list(results))
-        messages.append(tr_msg)
-        yield LoopEvent("tool_results", message=tr_msg)
+            results = await run_tools(tool_uses, by_name, ctx)
+            tr_msg = Message(role="user", content=list(results))
+            messages.append(tr_msg)
+            turn_span.set(tools_run=len(results))
+            yield LoopEvent("tool_results", message=tr_msg)
 
         turn += 1
         if max_turns and turn >= max_turns:

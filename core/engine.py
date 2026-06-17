@@ -14,7 +14,7 @@ from core.harness.approval import ApprovalMode
 from core.loop import LoopEvent, agent_loop
 from core.memory.recall import age_caveat, humanize_age
 from core.memory.reflect import extract_memories
-from core.obs.tracer import ConsoleTracer
+from core.obs.tracer import ConsoleTracer, summarize
 from core.tools.base import PermissionResult, Tool, ToolContext
 from core.types import Message, TextBlock
 
@@ -74,14 +74,17 @@ class SessionEngine:
             tracer=self.tracer,
         )
         on_before = self.context_manager.maybe_compact if self.context_manager is not None else None
-        async for ev in agent_loop(
-            messages=self.messages, system=system, provider=self.provider,
-            tools=self.tools, ctx=ctx, model=self.model, max_turns=self.max_turns,
-            on_before_turn=on_before,
-        ):
-            if ev.message is not None:
-                self._persist(ev.message)
-            yield ev
+        with self.tracer.span("run", kind="run", input=summarize(text)) as run_span:
+            async for ev in agent_loop(
+                messages=self.messages, system=system, provider=self.provider,
+                tools=self.tools, ctx=ctx, model=self.model, max_turns=self.max_turns,
+                on_before_turn=on_before,
+            ):
+                if ev.message is not None:
+                    self._persist(ev.message)
+                if ev.kind == "done":
+                    run_span.set(output=ev.reason)
+                yield ev
         await self._reflect()
 
     async def _augment_system(self, text: str) -> str:

@@ -11,6 +11,7 @@ from typing import Callable
 from pydantic import ValidationError
 
 from core.harness.approval import gate
+from core.obs.tracer import summarize
 from core.tools.base import Tool, ToolContext
 from core.types import ToolResultBlock, ToolUseBlock
 
@@ -48,6 +49,16 @@ def _partition(tool_uses: list[ToolUseBlock], by_name: dict[str, Tool]) -> list[
 
 
 async def _run_one(
+    tu: ToolUseBlock, by_name: dict[str, Tool], ctx: ToolContext,
+    on_progress: Callable[[str], None],
+) -> ToolResultBlock:
+    with ctx.tracer.span(f"tool:{tu.name}", kind="tool", input=summarize(tu.input)) as tspan:
+        block = await _run_one_inner(tu, by_name, ctx, on_progress)
+        tspan.set(output=summarize(block.content), is_error=block.is_error)
+        return block
+
+
+async def _run_one_inner(
     tu: ToolUseBlock, by_name: dict[str, Tool], ctx: ToolContext,
     on_progress: Callable[[str], None],
 ) -> ToolResultBlock:

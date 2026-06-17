@@ -102,6 +102,11 @@ async def _run(args: argparse.Namespace) -> int:
         mem_dir = args.memory_dir or os.path.expanduser("~/.agenty/memory")
         memory_store = FileMemoryStore(mem_dir, provider=provider, model=args.model)
 
+    # tracer：默认 Langfuse(若配置)否则 Null（不刷屏）；--trace 用 Console 打 span 树
+    from core.obs.tracer import build_tracer
+
+    tracer = build_tracer(console=args.trace)
+
     engine = SessionEngine(
         provider=provider,
         tools=scenario.tools(),
@@ -111,6 +116,7 @@ async def _run(args: argparse.Namespace) -> int:
         approval_mode=approval_mode,
         request_approval=ask,
         transcript_path=transcript_path,
+        tracer=tracer,
         context_manager=context_manager,
         memory_store=memory_store,
         reflect=memory_store is not None,
@@ -140,6 +146,8 @@ async def _run(args: argparse.Namespace) -> int:
         elif ev.kind == "done":
             reason = ev.reason or "done"
             print(f"\n🏁 {reason}")
+    if hasattr(tracer, "flush"):
+        tracer.flush()  # LangfuseTracer：把缓冲 span 推送上去
     return 0 if reason == "completed" else 1
 
 
@@ -208,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--no-memory", action="store_true", help="关闭长期记忆（默认开，跨会话召回+反思）")
     rp.add_argument("--no-compact", action="store_true", help="关闭上下文压缩（默认开）")
     rp.add_argument("--memory-dir", help="记忆目录（默认 ~/.agenty/memory）")
+    rp.add_argument("--trace", action="store_true", help="打印 span 树（run/turn/llm/tool）")
 
     ep = sub.add_parser("eval", help="跑任务集出 pass@1")
     ep.add_argument("--taskset", required=True, help="任务集目录，如 evals/coding-v1")

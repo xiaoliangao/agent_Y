@@ -94,10 +94,13 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
         memory_store = FileMemoryStore(
             os.path.join(app.state.data_dir, "memory"), provider=provider, model=app.state.model
         )
+    from core.obs.tracer import build_tracer
+
     eng = SessionEngine(
         provider=provider, tools=scenario.tools(), system=scenario.system_prompt(),
         sandbox=LocalExecutor(workspace), model=app.state.model, approval_mode=app.state.approval_mode,
-        context_manager=context_manager, memory_store=memory_store, reflect=memory_store is not None,
+        tracer=build_tracer(console=False), context_manager=context_manager,
+        memory_store=memory_store, reflect=memory_store is not None,
     )
     eng.messages = [Message.model_validate(m) for m in app.state.store.get_messages(sid)]
     return eng
