@@ -35,5 +35,10 @@ app = BUNDLE(
     name="Agent Y.app",
     icon=None,
     bundle_identifier="com.agenty.app",
-    info_plist={"NSHighResolutionCapable": True, "LSBackgroundOnly": False},
+    info_plist={
+        "NSHighResolutionCapable": True,
+        "LSBackgroundOnly": False,
+        # 允许 WebKit 加载本地 http://127.0.0.1（否则 ATS 拦非 https → 白屏）
+        "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},
+    },
 )

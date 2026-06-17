@@ -200,7 +200,8 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
     app.add_middleware(
         CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
     )
-    data_dir = data_dir or ".agenty"
+    # 默认绝对路径（~/.agenty）：打包后 Finder 启动 cwd=/，相对 ".agenty" 会落到只读的 /.agenty
+    data_dir = data_dir or os.environ.get("AGENTY_DATA") or os.path.expanduser("~/.agenty")
     app.state.store = Store(db_path or os.path.join(data_dir, "agenty.db"))
     app.state.provider = provider
     app.state.model = model or os.environ.get("AGENTY_MODEL", "claude-sonnet-4-6")
