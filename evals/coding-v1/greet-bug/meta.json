@@ -1,0 +1,4 @@
+{
+  "prompt": "运行测试，找出并修复 greet.py 里导致测试失败的 bug，直到 pytest 通过。",
+  "test_cmd": "python3 -m pytest -q"
+}

@@ -21,6 +21,10 @@ import sys
 import tempfile
 
 from core.engine import SessionEngine
+from core.eval.harness import run_taskset
+from core.eval.improve import improve
+from core.eval.taskset import load_taskset
+from core.eval.types import Policy
 from core.harness.approval import ApprovalMode
 from core.scenarios.coding.scenario import CodingScenario
 from core.types import Message
@@ -114,22 +118,78 @@ async def _run(args: argparse.Namespace) -> int:
     return 0 if reason == "completed" else 1
 
 
+def _add_provider_args(sp: argparse.ArgumentParser) -> None:
+    sp.add_argument("--provider", choices=["anthropic", "openai"], default="anthropic")
+    sp.add_argument("--base-url", help="OpenAI 兼容端点 base_url（如 DeepSeek: https://api.deepseek.com）")
+    sp.add_argument("--api-key-env", help="读取 key 的环境变量名（默认 ANTHROPIC_API_KEY / OPENAI_API_KEY）")
+    sp.add_argument("--model", default="claude-sonnet-4-6", help="模型 id（DeepSeek 用 deepseek-chat）")
+
+
+async def _eval(args: argparse.Namespace) -> int:
+    try:
+        provider = _build_provider(args)
+    except RuntimeError as e:
+        print(f"⚠️  {e}", file=sys.stderr)
+        return 1
+    tasks = load_taskset(args.taskset)
+    if not tasks:
+        print(f"任务集为空: {args.taskset}", file=sys.stderr)
+        return 2
+    sc = CodingScenario()
+    print(f"跑 {len(tasks)} 个任务 @ {args.model} …")
+    run = await run_taskset(tasks, provider=provider, model=args.model, system=sc.system_prompt(), tools=sc.tools())
+    for r in run.results:
+        print(f"  {'✅' if r.passed else '❌'} {r.task_id}")
+    n_pass = sum(1 for r in run.results if r.passed)
+    print(f"\npass@1 = {run.pass_rate * 100:.0f}%  ({n_pass}/{len(run.results)})")
+    return 0
+
+
+async def _improve(args: argparse.Namespace) -> int:
+    try:
+        provider = _build_provider(args)
+    except RuntimeError as e:
+        print(f"⚠️  {e}", file=sys.stderr)
+        return 1
+    tasks = load_taskset(args.taskset)
+    if len(tasks) < 2:
+        print("自进化需要 ≥2 个任务（拆 train/val）", file=sys.stderr)
+        return 2
+    sc = CodingScenario()
+    print(f"自进化一轮 @ {args.model} …（跑基线 + 据失败生成经验 + 验证集重跑）")
+    rec, policy = await improve(tasks, provider=provider, model=args.model, base_policy=Policy(sc.system_prompt()), tools=sc.tools())
+    print(f"\n基线 pass@1: {rec.baseline_pass * 100:.0f}%  →  候选: {rec.candidate_pass * 100:.0f}%  (Δ {rec.delta * 100:+.0f}pt)")
+    print(f"改动: {rec.change_desc}")
+    print(f"结论: {'✅ 保留（有提升）' if rec.kept else '↩️  回滚（无提升）'}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="agenty", description="Agent Y CLI")
     sub = p.add_subparsers(dest="cmd")
+
     rp = sub.add_parser("run", help="跑一个编码任务")
     rp.add_argument("task", help='任务描述，如 "修复失败的测试"')
     rp.add_argument("--workspace", help="工作目录（默认临时目录）")
-    rp.add_argument("--provider", choices=["anthropic", "openai"], default="anthropic")
-    rp.add_argument("--base-url", help="OpenAI 兼容端点 base_url（如 DeepSeek: https://api.deepseek.com）")
-    rp.add_argument("--api-key-env", help="读取 key 的环境变量名（默认 ANTHROPIC_API_KEY / OPENAI_API_KEY）")
-    rp.add_argument("--model", default="claude-sonnet-4-6", help="模型 id（DeepSeek 用 deepseek-chat）")
+    _add_provider_args(rp)
     rp.add_argument("--sandbox", choices=["local", "docker"], default="local")
     rp.add_argument("--yes", action="store_true", help="自动放行写/危险操作（审批=AUTO）")
+
+    ep = sub.add_parser("eval", help="跑任务集出 pass@1")
+    ep.add_argument("--taskset", required=True, help="任务集目录，如 evals/coding-v1")
+    _add_provider_args(ep)
+
+    ip = sub.add_parser("improve", help="自进化一轮（据失败改进，仅当提升才保留）")
+    ip.add_argument("--taskset", required=True, help="任务集目录")
+    _add_provider_args(ip)
 
     args = p.parse_args(argv)
     if args.cmd == "run":
         return asyncio.run(_run(args))
+    if args.cmd == "eval":
+        return asyncio.run(_eval(args))
+    if args.cmd == "improve":
+        return asyncio.run(_improve(args))
     p.print_help()
     return 0
 
