@@ -42,7 +42,14 @@ python -m cli.main run "修复 calculator.py 里失败的测试" \
 
 # 用 Docker 沙箱（隔离更安全，模型生成的代码只在容器内跑）
 python -m cli.main run "<任务>" --workspace <你的项目目录> --sandbox docker --yes
+
+# DeepSeek（OpenAI 兼容端点，已用真 key 实测可用）
+export DEEPSEEK_API_KEY=sk-...
+python -m cli.main run "<任务>" --provider openai --base-url https://api.deepseek.com \
+  --model deepseek-chat --api-key-env DEEPSEEK_API_KEY --workspace <项目目录> --yes
 ```
+
+> **Provider 选择**：`--provider anthropic`（默认，读 `ANTHROPIC_API_KEY`）或 `--provider openai`（OpenAI 兼容端点，配 `--base-url` + `--api-key-env`，覆盖 DeepSeek/GPT/本地 Ollama 等）。**密钥只从环境变量读，绝不写进文件/日志/trace**（PRD F8.1）。
 参数：`--workspace` 工作目录（默认临时目录）｜`--model` 模型 id（默认 `claude-sonnet-4-6`）｜`--sandbox local|docker`｜`--yes` 自动放行写/危险操作（不加则每次写操作交互确认）。
 
 > 若 SDK 对 `thinking`/`output_config` 参数报错：`core/providers/anthropic.py` 里 M1 默认**关** thinking，可按你的 anthropic SDK 版本微调（见该文件注释）。
@@ -57,7 +64,7 @@ python -m cli.main run "<任务>" --workspace <你的项目目录> --sandbox doc
 - **容器默认断网** → 容器内 `pip install` 装不了依赖。跑需要第三方库的编码任务时，二选一：① 用一个预装好依赖的自定义镜像；② 等 M2 支持"按任务放行网络"（`exec(network=True)` 目前 DockerSandbox 未透传，TODO）。本机/可信项目可先用 `--sandbox local`。
 - `exec` 的 `timeout` 在 DockerSandbox 里**尚未强制 kill**（TODO M1 收尾）。
 - 镜像架构跟随本机（本机为 arm64）；换机注意拉对应架构镜像。
-- AnthropicProvider 未用真 key 实测；thinking+signature 回传留到 M2。
+- **OpenAICompatProvider 已用 DeepSeek 真 key 实测通过**（完整跑通"读→测失败→改→测通过"闭环）。AnthropicProvider 未用真 key 实测；thinking+signature 回传留到 M2。
 
 ## 8. 协作约定（详见 `docs/design.md §8.3/§8.4`）
 - 分支 `feat/<模块>-<简述>`；提交 `类型(范围): 说明`；`main` 走 PR + 对方 review。

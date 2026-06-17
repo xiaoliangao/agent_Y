@@ -1,8 +1,15 @@
 """CLI 入口：`agenty run "<任务>"`。见 docs/design.md §1.1（CLI 直连 SessionEngine，不经 HTTP）。
 
 示例：
+  # Claude 原生
   export ANTHROPIC_API_KEY=sk-...
-  agenty run "修复 calculator.py 里失败的测试" --workspace ./examples/fix_failing_test
+  python -m cli.main run "修复失败的测试" --workspace examples/fix_failing_test --yes
+
+  # DeepSeek（OpenAI 兼容端点）
+  export DEEPSEEK_API_KEY=sk-...
+  python -m cli.main run "<任务>" --provider openai --base-url https://api.deepseek.com \
+    --model deepseek-chat --api-key-env DEEPSEEK_API_KEY --workspace <项目目录> --yes
+
 默认沙箱 = local（开发友好）；接 Docker：--sandbox docker。默认审批 = 问一下；--yes 自动放行。
 """
 from __future__ import annotations
@@ -23,6 +30,25 @@ def _text(msg: Message) -> str:
     return " ".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
 
 
+def _build_provider(args: argparse.Namespace):
+    if args.provider == "openai":
+        from core.providers.openai_compat import OpenAICompatProvider
+
+        env = args.api_key_env or "OPENAI_API_KEY"
+        key = os.environ.get(env)
+        if not key:
+            raise RuntimeError(f"未设置环境变量 {env}（OpenAI 兼容端点需要 API key）")
+        return OpenAICompatProvider(api_key=key, base_url=args.base_url)
+
+    from core.providers.anthropic import AnthropicProvider
+
+    env = args.api_key_env or "ANTHROPIC_API_KEY"
+    key = os.environ.get(env)
+    if not key:
+        raise RuntimeError(f"未设置环境变量 {env}")
+    return AnthropicProvider(api_key=key)
+
+
 def _build_sandbox(kind: str, workspace: str):
     if kind == "docker":
         from core.sandbox.docker import DockerSandbox
@@ -40,16 +66,9 @@ async def _run(args: argparse.Namespace) -> int:
         return 2
 
     try:
-        from core.providers.anthropic import AnthropicProvider
-
-        provider = AnthropicProvider()
-    except Exception as e:  # noqa: BLE001
-        print(f"初始化 provider 失败: {e}", file=sys.stderr)
-        return 1
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("⚠️  未设置 ANTHROPIC_API_KEY，无法调用真实模型。\n"
-              "    先 `export ANTHROPIC_API_KEY=sk-...`，或离线体验跑 `python scripts/demo_loop.py`。",
-              file=sys.stderr)
+        provider = _build_provider(args)
+    except RuntimeError as e:
+        print(f"⚠️  {e}\n    或离线体验：python scripts/demo_loop.py", file=sys.stderr)
         return 1
 
     scenario = CodingScenario()
@@ -72,7 +91,7 @@ async def _run(args: argparse.Namespace) -> int:
         transcript_path=os.path.join(workspace, "transcript.jsonl"),
     )
 
-    print(f"workspace: {workspace}\nmodel: {args.model} · sandbox: {args.sandbox}\n")
+    print(f"workspace: {workspace}\nprovider: {args.provider} · model: {args.model} · sandbox: {args.sandbox}\n")
     reason = "error"
     async for ev in engine.submit(args.task):
         if ev.kind == "assistant":
@@ -84,7 +103,7 @@ async def _run(args: argparse.Namespace) -> int:
         elif ev.kind == "tool_results":
             for b in ev.message.content:
                 flag = "❌" if b.is_error else "✅"
-                print(f"   {flag} {str(b.content)[:120]}")
+                print(f"   {flag} {str(b.content)[:140]}")
         elif ev.kind == "done":
             reason = ev.reason or "done"
             print(f"\n🏁 {reason}")
@@ -95,9 +114,12 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="agenty", description="Agent Y CLI")
     sub = p.add_subparsers(dest="cmd")
     rp = sub.add_parser("run", help="跑一个编码任务")
-    rp.add_argument("task", help="任务描述，如 \"修复失败的测试\"")
+    rp.add_argument("task", help='任务描述，如 "修复失败的测试"')
     rp.add_argument("--workspace", help="工作目录（默认临时目录）")
-    rp.add_argument("--model", default="claude-sonnet-4-6", help="模型 id")
+    rp.add_argument("--provider", choices=["anthropic", "openai"], default="anthropic")
+    rp.add_argument("--base-url", help="OpenAI 兼容端点 base_url（如 DeepSeek: https://api.deepseek.com）")
+    rp.add_argument("--api-key-env", help="读取 key 的环境变量名（默认 ANTHROPIC_API_KEY / OPENAI_API_KEY）")
+    rp.add_argument("--model", default="claude-sonnet-4-6", help="模型 id（DeepSeek 用 deepseek-chat）")
     rp.add_argument("--sandbox", choices=["local", "docker"], default="local")
     rp.add_argument("--yes", action="store_true", help="自动放行写/危险操作（审批=AUTO）")
 
