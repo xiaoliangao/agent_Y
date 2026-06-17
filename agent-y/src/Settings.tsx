@@ -31,7 +31,9 @@ function Dropdown({ value, options, onChange }: { value: string; options: { v: s
   const toggle = () => {
     if (!open && btn.current) {
       const r = btn.current.getBoundingClientRect();
-      setRect({ left: r.left, top: r.bottom + 6, width: r.width });
+      const h = options.length * 42 + 12;               // 估算弹层高度
+      const up = window.innerHeight - r.bottom < h + 16 && r.top > h + 16;  // 下方不够 → 向上翻
+      setRect({ left: r.left, top: up ? r.top - h - 6 : r.bottom + 6, width: r.width });
     }
     setOpen(!open);
   };
@@ -122,9 +124,9 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
           <button onClick={onClose} className="btn btn-ghost p-2"><X className="w-4 h-4" /></button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 no-scrollbar">
+        <div className="flex-1 overflow-y-auto p-7 no-scrollbar">
           {tab === 'provider' && (
-            <div className="space-y-6">
+            <div className="space-y-7">
               {conns.length > 0 && (
                 <div>
                   <div className="label mb-3">已保存的连接 · 点卡片即切换（key 存系统钥匙串，不入库）</div>
@@ -184,7 +186,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
           )}
 
           {tab === 'persona' && settings && (
-            <div className="space-y-6">
+            <div className="space-y-7">
               <div>
                 <div className="label mb-2 flex items-center gap-2"><User className="w-3.5 h-3.5" /> Agent 名字</div>
                 <input className="field" value={settings.agent_name} onChange={(e) => setSettings({ ...settings, agent_name: e.target.value })} onBlur={(e) => save({ agent_name: e.target.value })} />
@@ -194,11 +196,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                   <span className="flex items-center gap-2"><Sparkles className="w-3.5 h-3.5" /> 角色 / 人设</span>
                   <button className="btn btn-ghost text-[11px] px-2 py-1" onClick={() => { setSettings({ ...settings, persona: suggestion }); save({ persona: suggestion }); }}>载入推荐</button>
                 </div>
-                <textarea className="field leading-relaxed" rows={9}
-                  placeholder="给你的助手设定一个角色。比如：「你是我的产品经理搭档，说话直接、先问清楚再动手，回答简短不啰嗦。」&#10;留空就用默认助手；点右上「载入推荐」可填入一份现成模板再改。"
+                <textarea className="field leading-relaxed" rows={8}
+                  placeholder="例：你是我的产品经理搭档，说话直接、先问清楚再动手，回答简短不啰嗦。"
                   value={settings.persona} onChange={(e) => setSettings({ ...settings, persona: e.target.value })} onBlur={(e) => save({ persona: e.target.value })} />
-                <div className="text-[11.5px] mt-1.5 leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>
-                  这段会拼在每次对话最前面，决定助手的身份、语气和边界 —— 想让它更像谁、怎么说话、什么不能做，都写在这。失焦自动保存。
+                <div className="text-[11.5px] mt-2 leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>
+                  这段会拼在每次对话最前面，决定助手的身份、语气和边界。留空用默认助手；点右上「载入推荐」可填一份模板再改。失焦自动保存。
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">

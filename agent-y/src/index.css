@@ -60,10 +60,12 @@ textarea, input { font-family: inherit; }
 .btn-gold:hover { background: var(--color-gold-2); }
 .btn-gold:disabled { opacity: .45; cursor: not-allowed; }
 
-.field { width: 100%; background: #fffefb; border: 1px solid var(--color-line-2); border-radius: 10px;
-  padding: 10px 12px; font-size: 13.5px; color: var(--color-ink); outline: none; transition: border-color .15s; }
+.field { width: 100%; background: #fffefb; border: 1px solid var(--color-line-2); border-radius: 11px;
+  padding: 11px 13px; font-size: 13.5px; color: var(--color-ink); outline: none;
+  transition: border-color .15s, box-shadow .15s; }
 .field::placeholder { color: var(--color-ink-3); }
-.field:focus { border-color: var(--color-gold); }
+.field:hover { border-color: var(--color-ink-3); }
+.field:focus { border-color: var(--color-gold); box-shadow: 0 0 0 3px rgba(192,106,77,0.14); }
 
 .label { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--color-ink-3); font-weight: 600; }
 
