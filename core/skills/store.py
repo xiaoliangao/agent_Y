@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -18,7 +18,9 @@ class Skill:
     description: str
     when_to_use: str
     body: str
-    path: str = ""
+    path: str = ""   # SKILL.md 路径
+    dir: str = ""    # 技能目录（含 SKILL.md + 可能的脚本/资源）
+    files: list[str] = field(default_factory=list)  # 目录内其它文件（SKILL.md 除外，如脚本/资源）
 
 
 def parse_skill_md(text: str) -> tuple[dict, str]:
@@ -57,9 +59,18 @@ class FileSkillStore:
             return None
         with open(p, encoding="utf-8") as f:
             fm, body = parse_skill_md(f.read())
+        d = os.path.dirname(p)
+        files: list[str] = []
+        for root_, dirs_, fns_ in os.walk(d):
+            dirs_[:] = [x for x in dirs_ if not x.startswith(".") and x not in ("__pycache__", "node_modules")]
+            for fn in fns_:
+                if fn.startswith(".") or (fn == "SKILL.md" and root_ == d):
+                    continue
+                files.append(os.path.relpath(os.path.join(root_, fn), d))
+        files.sort()
         return Skill(
             name=fm.get("name") or name, description=fm.get("description", ""),
-            when_to_use=fm.get("when_to_use", ""), body=body.strip(), path=p,
+            when_to_use=fm.get("when_to_use", ""), body=body.strip(), path=p, dir=d, files=files,
         )
 
     def list(self) -> list[Skill]:
@@ -83,6 +94,30 @@ class FileSkillStore:
         )
         with open(self._path(slug), "w", encoding="utf-8") as f:
             f.write(content)
+        sk = self._load(slug)
+        assert sk is not None
+        return sk
+
+    def install(self, src: str) -> Skill:
+        """安装一个技能「包」：把含 SKILL.md 的文件夹（或单个 SKILL.md）整体拷进技能库。
+
+        类似 Claude Desktop 装 skill —— 连同里面的脚本/资源一起装好；之后 agent 检测到相关任务，
+        会按 SKILL.md 的说明（可引用同目录脚本）自动调用。
+        """
+        src = os.path.realpath(os.path.expanduser(src.strip()))
+        if os.path.isfile(src) and os.path.basename(src) == "SKILL.md":
+            src_dir = os.path.dirname(src)
+        elif os.path.isdir(src) and os.path.isfile(os.path.join(src, "SKILL.md")):
+            src_dir = src
+        else:
+            raise ValueError("未找到 SKILL.md（请选一个含 SKILL.md 的技能文件夹）")
+        with open(os.path.join(src_dir, "SKILL.md"), encoding="utf-8") as f:
+            fm, _ = parse_skill_md(f.read())
+        slug = _slug(fm.get("name") or os.path.basename(src_dir))
+        dest = os.path.join(self.root, slug)
+        if os.path.isdir(dest):
+            shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(src_dir, dest, ignore=shutil.ignore_patterns(".*", "__pycache__", "node_modules"))
         sk = self._load(slug)
         assert sk is not None
         return sk

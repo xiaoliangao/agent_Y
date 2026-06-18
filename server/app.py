@@ -134,6 +134,10 @@ class SkillIn(BaseModel):
     body: str | None = None
 
 
+class SkillInstallIn(BaseModel):
+    path: str  # 含 SKILL.md 的技能文件夹（或 SKILL.md 文件）路径
+
+
 def _get_provider(app: FastAPI) -> Any:
     if app.state.provider is not None:
         return app.state.provider  # 测试注入
@@ -700,7 +704,7 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
     @app.get("/skills")
     async def list_skills(request: Request):
         return {"skills": [
-            {"name": s.name, "description": s.description, "when_to_use": s.when_to_use}
+            {"name": s.name, "description": s.description, "when_to_use": s.when_to_use, "files": s.files}
             for s in request.app.state.skills.list()
         ]}
 
@@ -709,7 +713,16 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
         sk = request.app.state.skills.get(name)
         if sk is None:
             raise HTTPException(404, "skill_not_found")
-        return {"name": sk.name, "description": sk.description, "when_to_use": sk.when_to_use, "body": sk.body}
+        return {"name": sk.name, "description": sk.description, "when_to_use": sk.when_to_use,
+                "body": sk.body, "files": sk.files, "dir": sk.dir}
+
+    @app.post("/skills/install", status_code=201)
+    async def install_skill(body: SkillInstallIn, request: Request):  # 安装技能包（选含 SKILL.md 的文件夹）
+        try:
+            sk = request.app.state.skills.install(body.path)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"install_failed: {e}") from e
+        return {"name": sk.name, "description": sk.description, "when_to_use": sk.when_to_use, "files": sk.files}
 
     @app.post("/skills", status_code=201)
     async def add_skill(body: SkillIn, request: Request):

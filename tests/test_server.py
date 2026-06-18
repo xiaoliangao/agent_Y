@@ -293,6 +293,19 @@ async def test_skills_crud(tmp_path):
         assert (await client.get("/skills")).json()["skills"] == []
 
 
+async def test_skill_install_endpoint(tmp_path):
+    pkg = tmp_path / "mypkg"
+    pkg.mkdir()
+    (pkg / "SKILL.md").write_text("---\nname: 翻译\ndescription: 中英互译\n---\n\n保持术语一致")
+    (pkg / "glossary.txt").write_text("term=术语")
+    app = _app(tmp_path, MockProvider([]))
+    async with _client(app) as client:
+        r = await client.post("/skills/install", json={"path": str(pkg)})
+        assert r.status_code == 201 and r.json()["name"] == "翻译" and "glossary.txt" in r.json()["files"]
+        assert any(s["name"] == "翻译" for s in (await client.get("/skills")).json()["skills"])
+        assert (await client.post("/skills/install", json={"path": str(tmp_path / "nope")})).status_code == 400
+
+
 async def test_serves_frontend_when_present(tmp_path):
     fe = tmp_path / "fe"
     fe.mkdir()

@@ -47,7 +47,7 @@ export interface Weather {
   today?: WeatherDay | null; tomorrow?: WeatherDay | null;
   current?: WeatherCurrent | null; hourly?: WeatherHour[]; advice?: string;
 }
-export interface SkillMeta { name: string; description: string; when_to_use: string; }
+export interface SkillMeta { name: string; description: string; when_to_use: string; files?: string[]; }
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${BASE}${url}`, init);
@@ -113,6 +113,8 @@ export const listSkills = () => j<{ skills: SkillMeta[] }>("/skills").then((d) =
 export const getSkill = (name: string) =>
   j<{ name: string; description: string; when_to_use: string; body: string }>(`/skills/${encodeURIComponent(name)}`);
 export const addSkill = (s: { name: string; description?: string; when_to_use?: string; body?: string }) => post("/skills", s);
+export const installSkill = (path: string) =>
+  post("/skills/install", { path }) as Promise<{ name: string; description: string; when_to_use: string; files: string[] }>;
 export const deleteSkill = (name: string) => j(`/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
 
 // 原生目录选择：打包的 pywebview 窗口注入了 window.pywebview.api.pick_folder；浏览器 dev 时没有

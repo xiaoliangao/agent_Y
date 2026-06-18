@@ -39,4 +39,9 @@ class UseSkillTool(BaseTool):
             avail = ", ".join(s.name for s in self.store.list()) or "（无）"
             return ToolResult(data=f"没有名为「{inp.name}」的技能。可用技能：{avail}")
         head = f"# 技能：{sk.name}\n{sk.description}".rstrip()
-        return ToolResult(data=f"{head}\n\n{sk.body}".strip())
+        loc = ""
+        if sk.dir:
+            loc = f"\n技能目录：{sk.dir}"
+            if sk.files:
+                loc += f"\n附带文件（可用 bash 在该目录运行/读取）：{', '.join(sk.files)}"
+        return ToolResult(data=f"{head}{loc}\n\n{sk.body}".strip())
