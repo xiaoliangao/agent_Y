@@ -7,8 +7,19 @@ from core.tools.web import (
     WebSearchInput,
     WebSearchTool,
     html_to_text,
+    parse_bing,
     parse_ddg,
 )
+
+
+def test_parse_bing():
+    html = (
+        '<li class="b_algo"><h2><a href="https://e.com/x">标题A</a></h2><div><p>摘要A</p></div></li>'
+        '<li class="b_algo b_algoBig"><h2><a href="https://e.com/y" h="ID">B 标题</a></h2><p>snip B</p></li>'
+    )
+    rows = parse_bing(html)
+    assert rows[0] == ("标题A", "https://e.com/x", "摘要A")
+    assert rows[1][0] == "B 标题" and rows[1][1] == "https://e.com/y"
 
 
 def test_parse_ddg_extracts_title_url_snippet():

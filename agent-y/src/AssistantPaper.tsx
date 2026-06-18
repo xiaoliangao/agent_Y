@@ -1,10 +1,11 @@
 import React from 'react';
 import { motion } from 'motion/react';
 import {
-  MessageCircle, Sparkles, BookOpen, Calendar, Send, Paperclip,
+  MessageCircle, Sparkles, BookOpen, Calendar, Send, Paperclip, Square,
   CheckCircle2, Circle, Droplets, Wind, Plus, Trash2, X, KeyRound,
 } from 'lucide-react';
 import type { Weather, Todo, Folder } from './api';
+import Markdown from './Markdown';
 
 type Msg = { id: string; role: 'user' | 'assistant'; content: string };
 
@@ -36,7 +37,7 @@ export interface AssistantPaperProps {
   agentName: string;
   messages: Msg[];
   running: boolean;
-  input: string; setInput: (v: string) => void; onSend: () => void;
+  input: string; setInput: (v: string) => void; onSend: () => void; onStop: () => void;
   weather: Weather | null;
   todos: Todo[]; newTodo: string; setNewTodo: (v: string) => void;
   onAddTodo: () => void; onToggleTodo: (t: Todo) => void; onDeleteTodo: (id: string) => void;
@@ -184,7 +185,7 @@ export default function AssistantPaper(p: AssistantPaperProps) {
                     style={m.role === 'user'
                       ? { background: '#2d2926', color: '#fdf8f0', border: '2px solid #2d2926', boxShadow: '3px 3px 0 rgba(45,41,38,0.3)', fontSize: '13px', lineHeight: 1.6 }
                       : { background: '#fffef9', color: '#2d2926', border: '2px solid #2d2926', boxShadow: '3px 3px 0 rgba(45,41,38,0.15)', fontSize: '13px', lineHeight: 1.6 }}>
-                    <p className="whitespace-pre-wrap">{m.content}</p>
+                    {m.role === 'assistant' ? <Markdown>{m.content}</Markdown> : <p className="whitespace-pre-wrap">{m.content}</p>}
                   </div>
                 </motion.div>
               ))}
@@ -217,9 +218,9 @@ export default function AssistantPaper(p: AssistantPaperProps) {
                     <span style={{ fontSize: '11px', color: '#d1d5db', marginLeft: 'auto' }}>{p.input.length}/2000</span>
                   </div>
                 </div>
-                <motion.button whileHover={{ scale: 1.05, rotate: 5 }} whileTap={{ scale: 0.95 }} onClick={p.onSend} disabled={p.running || !p.input.trim()}
-                  style={{ width: '44px', height: '44px', borderRadius: '255px 15px 225px 15px/15px 225px 15px 255px', background: p.input.trim() ? '#f4a261' : '#f0d9c4', border: '2px solid #2d2926', boxShadow: '3px 3px 0 #2d2926', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
-                  <Send size={16} style={{ color: '#2d2926' }} />
+                <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={p.running ? p.onStop : p.onSend} disabled={!p.running && !p.input.trim()} title={p.running ? '停止' : '发送'}
+                  style={{ width: '44px', height: '44px', borderRadius: '255px 15px 225px 15px/15px 225px 15px 255px', background: p.running ? '#e76f51' : (p.input.trim() ? '#f4a261' : '#f0d9c4'), border: '2px solid #2d2926', boxShadow: '3px 3px 0 #2d2926', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+                  {p.running ? <Square size={14} fill="#2d2926" style={{ color: '#2d2926' }} /> : <Send size={16} style={{ color: '#2d2926' }} />}
                 </motion.button>
               </div>
             </div>

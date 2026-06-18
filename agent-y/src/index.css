@@ -84,6 +84,28 @@
 .hd-bubble-l { border-radius: 15px 255px 15px 225px/225px 15px 255px 15px; }  /* 助手气泡 */
 .hd-bubble-r { border-radius: 255px 15px 225px 15px/15px 225px 15px 255px; }  /* 用户气泡 */
 
+/* 助手/对话里的 Markdown 渲染（继承气泡字色/字号，明暗主题通用） */
+.md { line-height: 1.7; word-break: break-word; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 .55em; }
+.md ul, .md ol { margin: .3em 0 .6em; padding-left: 1.4em; }
+.md ul { list-style: disc; } .md ol { list-style: decimal; }
+.md li { margin: .15em 0; }
+.md h1, .md h2, .md h3, .md h4 { font-weight: 600; margin: .7em 0 .35em; line-height: 1.3; }
+.md h1 { font-size: 1.22em; } .md h2 { font-size: 1.12em; } .md h3 { font-size: 1.04em; }
+.md strong { font-weight: 600; }
+.md a { color: var(--color-gold); text-decoration: underline; }
+.md code { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace; font-size: .88em;
+  background: rgba(127,127,127,0.16); padding: .08em .36em; border-radius: 4px; }
+.md pre { background: rgba(127,127,127,0.13); padding: .7em .8em; border-radius: 8px; overflow-x: auto; margin: .5em 0; }
+.md pre code { background: none; padding: 0; font-size: .85em; line-height: 1.55; }
+.md blockquote { border-left: 2px solid var(--color-line-2); padding-left: .8em; margin: .5em 0; color: var(--color-ink-2); }
+.md hr { border: none; border-top: 1px solid var(--color-line); margin: .8em 0; }
+.md table { border-collapse: collapse; margin: .5em 0; font-size: .95em; }
+.md th, .md td { border: 1px solid var(--color-line); padding: .25em .55em; text-align: left; }
+.md th { background: rgba(127,127,127,0.08); font-weight: 600; }
+
 * { border-color: var(--color-line); }
 
 html, body, #root { height: 100%; }

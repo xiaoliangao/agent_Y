@@ -3,14 +3,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import {
-  Plus, Settings as SettingsIcon, Code2, Briefcase, ArrowUp, X,
+  Plus, Settings as SettingsIcon, Code2, Briefcase, ArrowUp, X, Square,
   AlertTriangle, MessageSquare, KeyRound, Clock, Sparkles,
   FolderPlus, FileCode2, Terminal,
   Folder, FolderOpen, ChevronRight, FilePlus, RotateCw, PanelLeftClose, PanelLeftOpen,
   PanelLeft, PanelRight, PanelBottom,
 } from 'lucide-react';
 import {
-  createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile,
+  createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile, interruptSession,
   listProviders, getSettings, listReviews,
   listTodos, addTodo, patchTodo, deleteTodo, listFolders, addFolder, deleteFolder,
   getWeather, hasNativeFolderPick, pickFolderNative,
@@ -22,6 +22,7 @@ import SettingsPanel from './Settings';
 import AutomationsPanel from './Automations';
 import AssistantPaper from './AssistantPaper';
 import SkillsPanel from './Skills';
+import Markdown from './Markdown';
 
 type Msg = { id: string; role: 'user' | 'assistant'; content: string };
 type Step = { id: string; label: string; target?: string; status: 'running' | 'done' | 'error' };
@@ -333,6 +334,7 @@ export default function App() {
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [messages, trace, running]);
 
   const active = conns.find((c) => c.active);
+  const sceneThreads = threads.filter((t) => (t.scenario || 'coding') === scene);  // 最近列表按场景分
 
   const onFrame = (fr: Frame) => {
     if (fr.type === 'text_delta' && fr.text) {
@@ -366,11 +368,13 @@ export default function App() {
       for await (const fr of streamMessage(sid, text)) onFrame(fr);
       refreshThreads();
       refreshFiles(sid);  // 跑完刷新工作区文件树
+      if (scene === 'assistant') refreshDaily();  // agent 可能加了待办/提醒，刷新今日面板
     } catch (e) { setError(String(e)); }
     finally { setRunning(false); setApproval(null); }
   };
 
   const decide = async (d: 'allow' | 'deny') => { const a = approval; setApproval(null); if (a) await postApproval(a.approval_id, d); };
+  const stop = () => { if (sessionId) interruptSession(sessionId).catch(() => {}); };
   const resetWorkspace = () => { setTrace([]); setChanges([]); setError(null); setOpenTabs([]); setActiveTab(null); setFileCache({}); };
   const newThread = () => { setSessionId(null); setMessages([]); resetWorkspace(); setFiles([]); };
   const selectThread = async (id: string) => { setSessionId(id); resetWorkspace(); setMessages(toChat(await getSessionMessages(id))); refreshFiles(id); };
@@ -383,6 +387,8 @@ export default function App() {
     setChanges((p) => p.filter((c) => c.path !== ch.path));
     setFileCache((c) => ({ ...c, [ch.path]: ch.old }));
   };
+  // 日常 / 编码 对话独立：切场景就开一段新对话（左侧「最近」也按场景过滤）
+  useEffect(() => { newThread(); /* eslint-disable-next-line */ }, [scene]);
 
   // 对话消息流（助手宽版 / 编码窄版共用）
   const renderMessages = (narrow: boolean) => (
@@ -411,7 +417,7 @@ export default function App() {
             ? <div className="max-w-[85%] px-4 py-2.5 rounded-2xl rounded-tr-md text-[14px] leading-relaxed" style={{ background: 'var(--color-elevated)', border: '1px solid var(--color-line)' }}>{m.content}</div>
             : <div className="max-w-[92%]">
                 <div className="text-[12px] font-medium mb-1.5 tracking-wide" style={{ color: 'var(--color-gold)' }}>{agentName}</div>
-                <div className="text-[14px] leading-[1.7] whitespace-pre-wrap" style={{ color: 'var(--color-ink)' }}>{m.content}</div>
+                <div className="text-[14px]" style={{ color: 'var(--color-ink)' }}><Markdown>{m.content}</Markdown></div>
               </div>}
         </div>
       ))}
@@ -447,7 +453,9 @@ export default function App() {
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); run(); } }}
           placeholder={scene === 'assistant' ? '问问你的助手…' : '让我改代码 / 修测试…'}
           className="flex-1 bg-transparent outline-none resize-none px-3 py-2.5 text-[14px] max-h-44" style={{ color: 'var(--color-ink)' }} />
-        <button onClick={run} disabled={running || !input.trim()} className="btn btn-gold w-10 h-10 p-0 shrink-0"><ArrowUp className="w-[18px] h-[18px]" /></button>
+        {running
+          ? <button onClick={stop} title="停止" className="btn w-10 h-10 p-0 shrink-0" style={{ background: 'var(--color-danger)', color: '#fff' }}><Square className="w-[14px] h-[14px]" fill="currentColor" /></button>
+          : <button onClick={run} disabled={!input.trim()} className="btn btn-gold w-10 h-10 p-0 shrink-0"><ArrowUp className="w-[18px] h-[18px]" /></button>}
       </div>
     </>
   );
@@ -496,9 +504,9 @@ export default function App() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-3 mt-5 no-scrollbar">
-          <div className="label px-2 mb-2">最近</div>
-          {threads.length === 0 && <div className="px-2 text-[12.5px]" style={{ color: 'var(--color-ink-3)' }}>还没有对话。</div>}
-          {threads.map((th) => {
+          <div className="label px-2 mb-2">最近 · {scene === 'assistant' ? '助手' : '编码'}</div>
+          {sceneThreads.length === 0 && <div className="px-2 text-[12.5px]" style={{ color: 'var(--color-ink-3)' }}>还没有对话。</div>}
+          {sceneThreads.map((th) => {
             const on = th.id === sessionId;
             return (
               <button key={th.id} onClick={() => selectThread(th.id)}
@@ -542,7 +550,7 @@ export default function App() {
               agentName={agentName}
               messages={messages}
               running={running}
-              input={input} setInput={setInput} onSend={run}
+              input={input} setInput={setInput} onSend={run} onStop={stop}
               weather={weather}
               todos={todos} newTodo={newTodo} setNewTodo={setNewTodo}
               onAddTodo={addNewTodo} onToggleTodo={toggleTodo} onDeleteTodo={removeTodo}

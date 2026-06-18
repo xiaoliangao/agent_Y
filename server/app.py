@@ -182,6 +182,24 @@ def _active_model(app: FastAPI, role: str = "orchestrator") -> str:
     return app.state.model
 
 
+_WEEK = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+
+def _runtime_preamble(app: FastAPI, model: str) -> str:
+    """运行信息：真实模型 + 当前本地时间 + 诚实约束。解决「乱报模型/没有实时时间」。"""
+    import datetime
+
+    now = datetime.datetime.now().astimezone()
+    conn = app.state.providers.active()
+    via = f"（{conn['provider']} 接入）" if conn and conn.get("provider") else ""
+    return (
+        f"系统信息：你是 Agent Y 个人助手，背后由用户在设置里配置的模型「{model}」{via}驱动。"
+        f"当前本地时间：{now:%Y-%m-%d %H:%M} {_WEEK[now.weekday()]}。"
+        "被问「你是什么模型」时如实回答上面这个模型 id，切勿冒充 Claude/GPT 等其它厂商模型；"
+        "需要当前日期/时间直接用上面的；天气、新闻、实时赛事等外部信息要用工具查询、不要臆造。"
+    )
+
+
 def _sandbox(app: FastAPI, ws: str) -> Any:
     """按设置选执行器：docker（容器隔离，需装 Docker）或 local（宿主机，开发友好）。"""
     if app.state.settings.get().get("sandbox") == "docker":
@@ -217,10 +235,16 @@ async def _run_automation(app: FastAPI, prompt: str, scenario_name: str) -> str:
     scenario: Any = AssistantScenario(app.state.fs) if scenario_name == "assistant" else CodingScenario()
     ws = os.path.join(app.state.data_dir, "automations_ws")
     os.makedirs(ws, exist_ok=True)
+    model = _active_model(app)
+    tools = list(scenario.tools())
+    if scenario_name == "assistant":
+        from core.tools.todo import AddReminderTool, AddTodoTool
+
+        tools += [AddTodoTool(app.state.scheduler), AddReminderTool(app.state.scheduler)]
     eng = SessionEngine(
-        provider=_get_provider(app), tools=scenario.tools(),
-        system=app.state.settings.effective_system(scenario.system_prompt()),
-        sandbox=_sandbox(app, ws), model=_active_model(app),
+        provider=_get_provider(app), tools=tools,
+        system=_runtime_preamble(app, model) + "\n\n" + app.state.settings.effective_system(scenario.system_prompt()),
+        sandbox=_sandbox(app, ws), model=model,
         approval_mode=ApprovalMode.AUTO, tracer=build_tracer(console=False),
     )
     parts: list[str] = []
@@ -286,7 +310,7 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
     model = _active_model(app, "orchestrator")  # 会话主 loop（F1.4）
     sub_model = _active_model(app, "subagent")  # 子 agent 可配更便宜的跑量模型
     settings = app.state.settings.get()
-    system = app.state.settings.effective_system(scenario.system_prompt())  # 人设 + 场景提示词
+    system = _runtime_preamble(app, model) + "\n\n" + app.state.settings.effective_system(scenario.system_prompt())
     approval = _APPROVAL.get(settings.get("approval_mode", ""), app.state.approval_mode)
     # 上下文压缩（始终开，便宜）+ 长期记忆（按 app.state.memory_enabled，跨会话共享）
     from core.harness.context import ContextManager, context_window_for
@@ -306,6 +330,10 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
     from core.tools.subagent import SpawnAgentTool
 
     base_tools = scenario.tools() + [UseSkillTool(app.state.skills)]  # 技能渐进披露
+    if getattr(scenario, "name", "") == "assistant":  # 助手能把日程写进待办/提醒
+        from core.tools.todo import AddReminderTool, AddTodoTool
+
+        base_tools += [AddTodoTool(app.state.scheduler), AddReminderTool(app.state.scheduler)]
     # 每个会话带 spawn_agent（子 agent 用同一组工具但不含 spawn 自身，防递归）；子 agent 走 subagent 角色模型
     tools = base_tools + [SpawnAgentTool(provider=provider, model=sub_model, tools=base_tools, system=system)]
     eng = SessionEngine(
