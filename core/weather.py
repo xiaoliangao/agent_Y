@@ -56,6 +56,41 @@ def parse_forecast(data: dict) -> dict:
     return {"today": _day(data, 0), "tomorrow": _day(data, 1)}
 
 
+def parse_current(data: dict) -> dict | None:
+    """当前实况（温度/体感/湿度/风/天气）。"""
+    c = (data or {}).get("current") or {}
+    if not c:
+        return None
+    return {
+        "temp": c.get("temperature_2m"), "feels": c.get("apparent_temperature"),
+        "humidity": c.get("relative_humidity_2m"), "wind": c.get("wind_speed_10m"),
+        "code": c.get("weather_code"), "text": code_text(c.get("weather_code")),
+    }
+
+
+def parse_hourly(data: dict, n: int = 6) -> list[dict]:
+    """从当前时刻起的 n 个逐时点 [{time(HH:MM), temp, code, text}]。"""
+    h = (data or {}).get("hourly") or {}
+    times = h.get("time") or []
+    temps = h.get("temperature_2m") or []
+    codes = h.get("weather_code") or []
+    cur = ((data or {}).get("current") or {}).get("time")
+    start = 0
+    if cur:
+        for i, t in enumerate(times):
+            if t >= cur:
+                start = i
+                break
+    out: list[dict] = []
+    for i in range(start, min(start + n, len(times))):
+        code = codes[i] if i < len(codes) else None
+        out.append({
+            "time": times[i][11:16], "temp": temps[i] if i < len(temps) else None,
+            "code": code, "text": code_text(code),
+        })
+    return out
+
+
 def advise(today: dict | None, tomorrow: dict | None) -> str:
     """据明天预报给一句简短建议（带伞/添衣/防晒…）。无明天数据则退回今天。"""
     ref = tomorrow or today
@@ -104,6 +139,8 @@ async def fetch_forecast(lat: float, lon: float) -> dict:
         r = await c.get(_FORECAST, params={
             "latitude": lat, "longitude": lon, "timezone": "auto", "forecast_days": 2,
             "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+            "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m",
+            "hourly": "temperature_2m,weather_code",
         })
         return r.json() or {}
 
@@ -125,5 +162,6 @@ async def get_weather(*, city: str = "", lat: Any = None, lon: Any = None, label
     return {
         "ok": True, "label": label or city, "lat": lat, "lon": lon,
         "today": days["today"], "tomorrow": days["tomorrow"],
+        "current": parse_current(data), "hourly": parse_hourly(data),
         "advice": advise(days["today"], days["tomorrow"]),
     }

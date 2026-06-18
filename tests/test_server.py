@@ -281,6 +281,18 @@ async def test_open_folder_and_new_file(tmp_path):
         assert (await client.get(f"/sessions/{sid}/files")).json()["is_custom"] is False
 
 
+async def test_skills_crud(tmp_path):
+    app = _app(tmp_path, MockProvider([]))
+    async with _client(app) as client:
+        assert (await client.get("/skills")).json()["skills"] == []
+        r = await client.post("/skills", json={"name": "周报", "description": "写周报", "when_to_use": "周五", "body": "按要点写"})
+        assert r.status_code == 201 and r.json()["name"] == "周报"
+        assert any(s["name"] == "周报" for s in (await client.get("/skills")).json()["skills"])
+        assert (await client.get("/skills/周报")).json()["body"] == "按要点写"
+        assert (await client.delete("/skills/周报")).json()["ok"]
+        assert (await client.get("/skills")).json()["skills"] == []
+
+
 async def test_serves_frontend_when_present(tmp_path):
     fe = tmp_path / "fe"
     fe.mkdir()

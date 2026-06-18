@@ -38,10 +38,16 @@ export interface WeatherDay {
   date: string; code: number; text: string;
   tmax: number | null; tmin: number | null; precip_prob: number | null;
 }
+export interface WeatherCurrent {
+  temp: number | null; feels: number | null; humidity: number | null; wind: number | null; code: number; text: string;
+}
+export interface WeatherHour { time: string; temp: number | null; code: number; text: string; }
 export interface Weather {
   ok: boolean; reason?: string; label?: string;
-  today?: WeatherDay | null; tomorrow?: WeatherDay | null; advice?: string;
+  today?: WeatherDay | null; tomorrow?: WeatherDay | null;
+  current?: WeatherCurrent | null; hourly?: WeatherHour[]; advice?: string;
 }
+export interface SkillMeta { name: string; description: string; when_to_use: string; }
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${BASE}${url}`, init);
@@ -101,6 +107,13 @@ export const listFolders = () => j<{ folders: Folder[] }>("/folders").then((d) =
 export const addFolder = (path: string, mode = "read_write") => post("/folders", { path, mode });
 export const deleteFolder = (id: string) => j(`/folders/${id}`, { method: "DELETE" });
 export const getWeather = () => j<Weather>("/weather").catch(() => ({ ok: false } as Weather));
+
+// ---------- 技能（导入/渐进披露）----------
+export const listSkills = () => j<{ skills: SkillMeta[] }>("/skills").then((d) => d.skills ?? []).catch(() => []);
+export const getSkill = (name: string) =>
+  j<{ name: string; description: string; when_to_use: string; body: string }>(`/skills/${encodeURIComponent(name)}`);
+export const addSkill = (s: { name: string; description?: string; when_to_use?: string; body?: string }) => post("/skills", s);
+export const deleteSkill = (name: string) => j(`/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
 
 // 原生目录选择：打包的 pywebview 窗口注入了 window.pywebview.api.pick_folder；浏览器 dev 时没有
 export const hasNativeFolderPick = (): boolean =>

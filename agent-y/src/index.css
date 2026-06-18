@@ -45,6 +45,45 @@
   background: var(--color-bg);
 }
 
+/* 助手模式：手绘笔记本风 —— 奶茶格纸 + 手写体 + 不规则边框卡片 + 硬阴影。 */
+.theme-paper {
+  --color-bg: #fdf8f0;
+  --color-panel: #fffef9;
+  --color-elevated: #fff9e6;
+  --color-line: rgba(45,41,38,0.14);
+  --color-line-2: #2d2926;
+  --color-ink: #2d2926;
+  --color-ink-2: #6b7280;
+  --color-ink-3: #9ca3af;
+  --color-gold: #f4a261;
+  --color-gold-2: #e76f51;
+  --color-danger: #e76f51;
+  --color-ok: #2a9d8f;
+  font-family: 'Comic Sans MS', 'Chalkboard SE', 'Marker Felt', cursive;
+  color: var(--color-ink);
+  background:
+    radial-gradient(circle at 18% 16%, rgba(244,162,97,0.10) 0%, transparent 46%),
+    radial-gradient(circle at 84% 86%, rgba(106,159,181,0.10) 0%, transparent 46%),
+    repeating-linear-gradient(0deg, transparent, transparent 28px, rgba(45,41,38,0.035) 28px, rgba(45,41,38,0.035) 29px),
+    repeating-linear-gradient(90deg, transparent, transparent 28px, rgba(45,41,38,0.02) 28px, rgba(45,41,38,0.02) 29px),
+    #fdf8f0;
+}
+.theme-paper .font-serif { font-family: 'Comic Sans MS', 'Chalkboard SE', 'Marker Felt', cursive; }
+.sketch { font-family: 'Comic Sans MS', 'Chalkboard SE', 'Marker Felt', cursive; }
+.hd-card {
+  background: #fffef9;
+  border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
+  border: 2px solid #2d2926;
+  box-shadow: 4px 4px 0 #2d2926;
+}
+.hd-soft {  /* 较小元素的手绘块：圆角小、阴影浅 */
+  border-radius: 12px 3px 10px 3px/3px 10px 3px 12px;
+  border: 1.5px solid #2d2926;
+  box-shadow: 2px 2px 0 rgba(45,41,38,0.18);
+}
+.hd-bubble-l { border-radius: 15px 255px 15px 225px/225px 15px 255px 15px; }  /* 助手气泡 */
+.hd-bubble-r { border-radius: 255px 15px 225px 15px/15px 225px 15px 255px; }  /* 用户气泡 */
+
 * { border-color: var(--color-line); }
 
 html, body, #root { height: 100%; }

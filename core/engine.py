@@ -41,6 +41,7 @@ class SessionEngine:
         memory_store: Any = None,
         reflect: bool = False,
         memory_recall_k: int = 5,
+        skill_store: Any = None,
     ):
         self.provider = provider
         self.tools = tools
@@ -57,6 +58,7 @@ class SessionEngine:
         self.memory_store = memory_store  # 可选：长期记忆（召回注入 + 反思沉淀）
         self.reflect = reflect  # 会话结束后是否提炼记忆
         self.memory_recall_k = memory_recall_k
+        self.skill_store = skill_store  # 可选：技能清单注入 system（渐进披露，配合 use_skill 工具）
         self.messages: list[Message] = []
         self.abort = AbortSignal()
 
@@ -88,10 +90,20 @@ class SessionEngine:
         await self._reflect()
 
     async def _augment_system(self, text: str) -> str:
-        """把 MEMORY.md 索引 + 召回的相关记忆拼进 system（无 memory_store 则原样）。"""
-        if self.memory_store is None:
-            return self.system
+        """把技能清单 + MEMORY.md 索引 + 召回的相关记忆拼进 system（都没有则原样）。"""
         parts = [self.system]
+        if self.skill_store is not None:
+            try:
+                skill_index = self.skill_store.index()
+            except Exception:
+                skill_index = ""
+            if skill_index.strip():
+                parts.append(
+                    "# 可用技能（渐进披露：与任务相关时，先调 use_skill(name) 加载正文再照做）\n"
+                    + skill_index
+                )
+        if self.memory_store is None:
+            return "\n\n".join(parts) if len(parts) > 1 else self.system
         index = self.memory_store.load_index()
         if index.strip():
             parts.append("# 长期记忆索引 (MEMORY.md)\n" + index)

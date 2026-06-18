@@ -127,6 +127,13 @@ class NewFileIn(BaseModel):
     content: str | None = None
 
 
+class SkillIn(BaseModel):
+    name: str
+    description: str | None = None
+    when_to_use: str | None = None
+    body: str | None = None
+
+
 def _get_provider(app: FastAPI) -> Any:
     if app.state.provider is not None:
         return app.state.provider  # 测试注入
@@ -291,9 +298,10 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
             os.path.join(app.state.data_dir, "memory"), provider=provider, model=model
         )
     from core.obs.tracer import build_tracer
+    from core.tools.skill import UseSkillTool
     from core.tools.subagent import SpawnAgentTool
 
-    base_tools = scenario.tools()
+    base_tools = scenario.tools() + [UseSkillTool(app.state.skills)]  # 技能渐进披露
     # 每个会话带 spawn_agent（子 agent 用同一组工具但不含 spawn 自身，防递归）；子 agent 走 subagent 角色模型
     tools = base_tools + [SpawnAgentTool(provider=provider, model=sub_model, tools=base_tools, system=system)]
     eng = SessionEngine(
@@ -302,6 +310,7 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
         model=model, approval_mode=approval,
         tracer=build_tracer(console=False), context_manager=context_manager,
         memory_store=memory_store, reflect=memory_store is not None,
+        skill_store=app.state.skills,
     )
     eng.messages = [Message.model_validate(m) for m in app.state.store.get_messages(sid)]
     return eng
@@ -399,6 +408,9 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
             app.state.workspaces = json.load(f)
     except Exception:
         pass
+    from core.skills.store import FileSkillStore
+
+    app.state.skills = FileSkillStore(os.path.join(data_dir, "skills"))  # 用户导入的技能（渐进披露）
 
     @app.exception_handler(HTTPException)
     async def _http_exc(_req: Request, exc: HTTPException):  # 统一错误信封（design §4.0）
@@ -683,6 +695,37 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
                 weather_lat=w["lat"], weather_lon=w["lon"], weather_label=w["label"]
             )
         return w
+
+    # ---------- 技能（导入/渐进披露，design §4.6）----------
+    @app.get("/skills")
+    async def list_skills(request: Request):
+        return {"skills": [
+            {"name": s.name, "description": s.description, "when_to_use": s.when_to_use}
+            for s in request.app.state.skills.list()
+        ]}
+
+    @app.get("/skills/{name}")
+    async def get_skill(name: str, request: Request):
+        sk = request.app.state.skills.get(name)
+        if sk is None:
+            raise HTTPException(404, "skill_not_found")
+        return {"name": sk.name, "description": sk.description, "when_to_use": sk.when_to_use, "body": sk.body}
+
+    @app.post("/skills", status_code=201)
+    async def add_skill(body: SkillIn, request: Request):
+        if not body.name.strip():
+            raise HTTPException(400, "empty_name")
+        sk = request.app.state.skills.add(
+            body.name, description=body.description or "",
+            when_to_use=body.when_to_use or "", body=body.body or "",
+        )
+        return {"name": sk.name, "description": sk.description, "when_to_use": sk.when_to_use}
+
+    @app.delete("/skills/{name}")
+    async def del_skill(name: str, request: Request):
+        if not request.app.state.skills.delete(name):
+            raise HTTPException(404, "skill_not_found")
+        return {"ok": True}
 
     # ---------- 定时自动化 + review 队列（F6.6）----------
     @app.get("/automations")

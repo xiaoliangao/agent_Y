@@ -2,21 +2,23 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Plus, Settings as SettingsIcon, Code2, Briefcase, ArrowUp, X,
-  AlertTriangle, MessageSquare, KeyRound, Clock,
-  CloudSun, FolderPlus, CheckSquare, Square, FileCode2, Terminal,
+  AlertTriangle, MessageSquare, KeyRound, Clock, Sparkles,
+  FolderPlus, FileCode2, Terminal,
   Folder, FolderOpen, ChevronRight, FilePlus, RotateCw, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import {
   createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile,
   listProviders, getSettings, listReviews,
-  listTodos, addTodo, patchTodo, listFolders, addFolder, deleteFolder,
+  listTodos, addTodo, patchTodo, deleteTodo, listFolders, addFolder, deleteFolder,
   getWeather, hasNativeFolderPick, pickFolderNative,
   listWorkspaceFiles, readWorkspaceFile, setWorkspace, clearWorkspace, newWorkspaceFile,
   type Frame, type SessionSummary, type Connection, type Todo, type Folder as FolderT,
-  type Weather, type WeatherDay, type WorkspaceFile,
+  type Weather, type WorkspaceFile,
 } from './api';
 import SettingsPanel from './Settings';
 import AutomationsPanel from './Automations';
+import AssistantPaper from './AssistantPaper';
+import SkillsPanel from './Skills';
 
 type Msg = { id: string; role: 'user' | 'assistant'; content: string };
 type Step = { id: string; label: string; target?: string; status: 'running' | 'done' | 'error' };
@@ -125,22 +127,6 @@ function StatusDot({ running }: { running: boolean }) {
   );
 }
 
-// 日常面板里的单日天气
-function Wx({ day, label }: { day: WeatherDay; label: string }) {
-  return (
-    <div className="text-center flex-1">
-      <div className="text-[11px] mb-1" style={{ color: 'var(--color-ink-3)' }}>{label}</div>
-      <div className="text-[13.5px]" style={{ color: 'var(--color-ink)' }}>{day.text}</div>
-      <div className="text-[12px] mt-1" style={{ color: 'var(--color-ink-2)' }}>
-        {day.tmax != null ? `${Math.round(day.tmax)}°` : '—'}
-        <span style={{ color: 'var(--color-ink-3)' }}> / {day.tmin != null ? `${Math.round(day.tmin)}°` : '—'}</span>
-      </div>
-      {day.precip_prob != null && day.precip_prob >= 30 &&
-        <div className="text-[10.5px] mt-0.5" style={{ color: 'var(--color-gold)' }}>降水 {day.precip_prob}%</div>}
-    </div>
-  );
-}
-
 // 编码 IDE 中央：只读代码查看（行号槽，编辑器感）
 function CodeView({ content }: { content?: string }) {
   if (content === undefined) return <div className="p-5 text-[12.5px]" style={{ color: 'var(--color-ink-3)' }}>加载中…</div>;
@@ -229,6 +215,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showAutos, setShowAutos] = useState(false);
+  const [showSkills, setShowSkills] = useState(false);
   const [pendingReviews, setPendingReviews] = useState(0);
   const [conns, setConns] = useState<Connection[]>([]);
   const [agentName, setAgentName] = useState('Agent Y');
@@ -274,6 +261,7 @@ export default function App() {
     refreshDaily();
   };
   const toggleTodo = async (td: Todo) => { await patchTodo(td.id, { done: !td.done }).catch(() => {}); refreshDaily(); };
+  const removeTodo = async (id: string) => { await deleteTodo(id).catch(() => {}); refreshDaily(); };
   const pickFolder = async () => {
     let path: string | null = null;
     if (hasNativeFolderPick()) path = await pickFolderNative();
@@ -446,7 +434,7 @@ export default function App() {
   );
 
   return (
-    <div className={`flex h-screen w-full overflow-hidden ${scene === 'coding' ? 'theme-ide' : ''}`} style={{ color: 'var(--color-ink)' }}>
+    <div className={`flex h-screen w-full overflow-hidden ${scene === 'coding' ? 'theme-ide' : 'theme-paper'}`} style={{ color: 'var(--color-ink)' }}>
       {/* SIDEBAR —— 编码模式折叠成图标栏 */}
       {navCollapsed ? (
         <aside className="w-[56px] shrink-0 hidden md:flex flex-col items-center py-3 gap-1" style={{ background: 'var(--color-panel)', borderRight: '1px solid var(--color-line)' }}>
@@ -465,6 +453,7 @@ export default function App() {
             <Clock className="w-4 h-4" />
             {pendingReviews > 0 && <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-gold)' }} />}
           </button>
+          <button onClick={() => setShowSkills(true)} title="技能" className="btn btn-ghost p-2"><Sparkles className="w-4 h-4" /></button>
           <button onClick={() => setShowSettings(true)} title="设置" className="btn btn-ghost p-2"><SettingsIcon className="w-4 h-4" /></button>
         </aside>
       ) : (
@@ -508,6 +497,7 @@ export default function App() {
             <Clock className="w-4 h-4" /> 自动化
             {pendingReviews > 0 && <span className="ml-auto px-1.5 rounded-full text-[10px] font-semibold" style={{ background: 'var(--color-gold)', color: '#fff7f1' }}>{pendingReviews}</span>}
           </button>
+          <button onClick={() => setShowSkills(true)} className="btn btn-ghost w-full justify-start"><Sparkles className="w-4 h-4" /> 技能</button>
           <button onClick={() => setShowSettings(true)} className="btn btn-ghost w-full justify-start"><SettingsIcon className="w-4 h-4" /> 设置</button>
         </div>
       </aside>
@@ -529,83 +519,18 @@ export default function App() {
 
         <div className="flex flex-1 overflow-hidden">
           {scene === 'assistant' ? (
-            <>
-              {/* 助手：对话主区 */}
-              <div className="flex-1 flex flex-col min-w-0 relative">
-                <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 pt-10 pb-44 no-scrollbar">
-                  <div className="max-w-2xl mx-auto w-full">
-                    {renderMessages(false)}
-                    {changes.length > 0 && (
-                      <div className="mt-1 mb-8">
-                        <div className="label mb-2.5">本次改动 · {changes.length} 个文件</div>
-                        {changes.map((ch) => (
-                          <div key={ch.path}><DiffCard ch={ch} onKeep={() => keepChange(ch.path)} onRevert={() => revertChange(ch)} /></div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <div className="absolute bottom-0 inset-x-0 px-6 pb-6 pt-12 pointer-events-none" style={{ background: 'linear-gradient(to top, var(--color-bg) 55%, transparent)' }}>
-                  <div className="max-w-2xl mx-auto pointer-events-auto">{composer(true)}</div>
-                </div>
-              </div>
-
-              {/* 日常面板：今日天气 + 待办 */}
-              <aside className="w-[300px] shrink-0 hidden lg:flex flex-col" style={{ background: 'var(--color-panel)', borderLeft: '1px solid var(--color-line)' }}>
-                <div className="h-12 flex items-center px-5" style={{ borderBottom: '1px solid var(--color-line)' }}>
-                  <span className="label">今日</span>
-                </div>
-                <div className="flex-1 overflow-y-auto p-5 no-scrollbar space-y-6">
-                  <div>
-                    <div className="label mb-2.5 flex items-center gap-2"><CloudSun className="w-3.5 h-3.5" /> 天气{weather?.ok && weather.label ? ` · ${weather.label}` : ''}</div>
-                    {weather?.ok ? (
-                      <div className="card p-3.5" style={{ background: 'var(--color-elevated)' }}>
-                        <div className="flex items-start gap-2">
-                          {weather.today && <Wx day={weather.today} label="今天" />}
-                          {weather.tomorrow && <><span style={{ width: 1, alignSelf: 'stretch', background: 'var(--color-line)' }} /><Wx day={weather.tomorrow} label="明天" /></>}
-                        </div>
-                        {weather.advice && (
-                          <div className="text-[12px] leading-relaxed mt-3 pt-3" style={{ color: 'var(--color-ink-2)', borderTop: '1px solid var(--color-line)' }}>{weather.advice}</div>
-                        )}
-                      </div>
-                    ) : (
-                      <button onClick={() => setShowSettings(true)} className="text-[12.5px] text-left leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>
-                        在设置里填写城市，这里就会显示今天 / 明天天气和出行建议 →
-                      </button>
-                    )}
-                  </div>
-
-                  <div>
-                    <div className="label mb-2.5">待办</div>
-                    <div className="flex items-center gap-1.5 mb-3">
-                      <input value={newTodo} onChange={(e) => setNewTodo(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') addNewTodo(); }}
-                        placeholder="加一项待办…" className="field py-2 text-[13px]" />
-                      <button onClick={addNewTodo} className="btn btn-gold w-9 h-9 p-0 shrink-0"><Plus className="w-4 h-4" /></button>
-                    </div>
-                    <div className="space-y-0.5">
-                      {todos.filter((t) => !t.done).length === 0 && <div className="text-[12.5px] px-1" style={{ color: 'var(--color-ink-3)' }}>没有待办，清爽。</div>}
-                      {todos.filter((t) => !t.done).map((t) => (
-                        <button key={t.id} onClick={() => toggleTodo(t)} className="w-full flex items-start gap-2 px-1.5 py-1.5 rounded-lg text-left transition-colors hover:bg-[rgba(43,42,39,0.04)]">
-                          <Square className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--color-ink-3)' }} />
-                          <span className="text-[13px]" style={{ color: 'var(--color-ink-2)' }}>{t.text}{t.due && <span className="ml-1.5 text-[11px]" style={{ color: 'var(--color-ink-3)' }}>· {t.due}</span>}</span>
-                        </button>
-                      ))}
-                      {todos.some((t) => t.done) && (
-                        <div className="pt-1.5 mt-1.5" style={{ borderTop: '1px solid var(--color-line)' }}>
-                          {todos.filter((t) => t.done).map((t) => (
-                            <button key={t.id} onClick={() => toggleTodo(t)} className="w-full flex items-start gap-2 px-1.5 py-1.5 rounded-lg text-left transition-colors hover:bg-[rgba(43,42,39,0.04)]">
-                              <CheckSquare className="w-4 h-4 mt-0.5 shrink-0" style={{ color: 'var(--color-ok)' }} />
-                              <span className="text-[13px] line-through" style={{ color: 'var(--color-ink-3)' }}>{t.text}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </aside>
-            </>
+            <AssistantPaper
+              agentName={agentName}
+              messages={messages}
+              running={running}
+              input={input} setInput={setInput} onSend={run}
+              weather={weather}
+              todos={todos} newTodo={newTodo} setNewTodo={setNewTodo}
+              onAddTodo={addNewTodo} onToggleTodo={toggleTodo} onDeleteTodo={removeTodo}
+              folders={folders} onPickFolder={pickFolder} onRemoveFolder={removeFolder}
+              hasConns={conns.length > 0} onOpenSettings={() => setShowSettings(true)}
+              error={error}
+            />
           ) : (
             <>
               {/* 编码 IDE：(文件树 | 编辑器) 上 / 终端 下；右侧对话全高 */}
@@ -744,6 +669,9 @@ export default function App() {
       </AnimatePresence>
       <AnimatePresence>
         {showAutos && <AutomationsPanel onClose={() => { setShowAutos(false); refreshConfig(); }} />}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showSkills && <SkillsPanel onClose={() => setShowSkills(false)} />}
       </AnimatePresence>
     </div>
   );
