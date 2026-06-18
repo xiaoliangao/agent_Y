@@ -1,0 +1,43 @@
+name: Release (macOS .dmg)
+
+# 打一个 v* 标签就自动构建 .dmg 并挂到对应 GitHub Release。
+#   git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}   # 也可在 Actions 页手动触发（产物存为 artifact）
+
+permissions:
+  contents: write   # 上传到 Release 需要
+
+jobs:
+  build-dmg:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build .dmg
+        run: bash scripts/build_dmg.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-y-dmg
+          path: dist/Agent-Y-*.dmg
+
+      - name: Attach to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Agent-Y-*.dmg
+          body: |
+            Agent Y 桌面版（macOS）。下载 `.dmg` → 双击 → 把 **Agent Y** 拖进 **Applications**。
+            首次打开：右键 → 打开（未签名，需放行一次）。安装后在「设置」里配置模型连接即可使用。

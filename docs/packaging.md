@@ -10,6 +10,19 @@ scripts/build_app.sh          # 构建前端 → 装依赖 → PyInstaller → d
 
 > 打包与 GUI **必须在 macOS 本机**跑，不能在容器/headless CI。
 
+## 发布安装包（.dmg）+ GitHub Release
+面向用户分发用 `.dmg`（拖进 Applications 即装）：
+```bash
+scripts/build_dmg.sh              # 构建 .app 后打成 dist/Agent-Y-<版本>.dmg
+scripts/build_dmg.sh --skip-build # 复用已有 .app，只重打 dmg
+```
+- 版本号取自 `pyproject.toml` 的 `project.version`（或 `AGENTY_VERSION` 环境变量）；同时写进 `.app` 的 `CFBundleShortVersionString`（spec 里 `APP_VERSION`）。**发布时改 `pyproject.toml` 版本号即可。**
+- **自动发布**：打 `v*` 标签 → `.github/workflows/release.yml` 在 macOS runner 上构建 `.dmg` 并挂到对应 Release：
+  ```bash
+  git tag v0.1.0 && git push origin v0.1.0
+  ```
+- **未签名/未公证**：用户首次需「右键→打开」。要免这步得有 Apple Developer 证书做 codesign + notarytool 公证（后续可加进 workflow 的 secrets）。
+
 ## 分步（排错时）
 ```bash
 cd agent-y && npm install && npm run build   # 1. 前端 → agent-y/dist
