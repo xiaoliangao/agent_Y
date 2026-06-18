@@ -1,8 +1,8 @@
 import React from 'react';
 import { motion } from 'motion/react';
 import {
-  MessageCircle, Sparkles, BookOpen, Calendar, Send, Paperclip, Mic,
-  CheckCircle2, Circle, Droplets, Wind, Plus, Trash2, FolderPlus, X, KeyRound,
+  MessageCircle, Sparkles, BookOpen, Calendar, Send, Paperclip,
+  CheckCircle2, Circle, Droplets, Wind, Plus, Trash2, X, KeyRound,
 } from 'lucide-react';
 import type { Weather, Todo, Folder } from './api';
 
@@ -197,17 +197,6 @@ export default function AssistantPaper(p: AssistantPaperProps) {
             </div>
 
             <div className="p-3" style={{ borderTop: '2px dashed rgba(45,41,38,0.15)' }}>
-              <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                {p.folders.map((f) => (
-                  <span key={f.id} className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 hd-soft" style={{ fontSize: '10.5px', color: '#374151', background: '#fffef9' }}>
-                    📁 <span className="truncate max-w-[120px]" title={f.path}>{f.path.split('/').filter(Boolean).pop() || f.path}</span>
-                    <button onClick={() => p.onRemoveFolder(f.id)} className="opacity-50 hover:opacity-100"><X size={11} /></button>
-                  </span>
-                ))}
-                <button onClick={p.onPickFolder} className="inline-flex items-center gap-1 px-2 py-0.5 hd-soft" style={{ fontSize: '10.5px', color: '#9ca3af', background: '#fffef9', borderStyle: 'dashed' }}>
-                  <FolderPlus size={12} /> {p.folders.length ? '加文件夹' : '选择文件夹读取'}
-                </button>
-              </div>
               <div className="flex items-end gap-2">
                 <div className="flex-1 p-3" style={{ background: '#fffef9', borderRadius: '255px 15px 225px 15px/15px 225px 15px 255px', border: '2px solid #2d2926', boxShadow: '2px 2px 0 rgba(45,41,38,0.15)' }}>
                   <textarea value={p.input} onChange={(e) => p.setInput(e.target.value)}
@@ -216,8 +205,15 @@ export default function AssistantPaper(p: AssistantPaperProps) {
                     className="w-full bg-transparent outline-none resize-none placeholder:text-gray-400"
                     style={{ color: '#2d2926', fontSize: '13px', maxHeight: '80px', fontFamily: SKETCH }} disabled={p.running} />
                   <div className="flex items-center gap-1.5 mt-2 pt-2" style={{ borderTop: '1px dashed rgba(45,41,38,0.15)' }}>
-                    <Paperclip size={13} style={{ color: '#cbd5e1' }} />
-                    <Mic size={13} style={{ color: '#cbd5e1' }} />
+                    <button onClick={p.onPickFolder} title="选择文件夹读取" style={{ display: 'flex' }}>
+                      <Paperclip size={13} style={{ color: p.folders.length ? '#f4a261' : '#9ca3af' }} />
+                    </button>
+                    {p.folders.map((f) => (
+                      <span key={f.id} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md" style={{ fontSize: '10px', color: '#6b7280', background: '#fff4e6', border: '1px solid #f4d3b0' }}>
+                        <span className="truncate" style={{ maxWidth: '84px' }} title={f.path}>{f.path.split('/').filter(Boolean).pop() || f.path}</span>
+                        <button onClick={() => p.onRemoveFolder(f.id)} className="opacity-60 hover:opacity-100"><X size={9} /></button>
+                      </span>
+                    ))}
                     <span style={{ fontSize: '11px', color: '#d1d5db', marginLeft: 'auto' }}>{p.input.length}/2000</span>
                   </div>
                 </div>

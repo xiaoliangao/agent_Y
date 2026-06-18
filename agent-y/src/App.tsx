@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import {
   Plus, Settings as SettingsIcon, Code2, Briefcase, ArrowUp, X,
   AlertTriangle, MessageSquare, KeyRound, Clock, Sparkles,
   FolderPlus, FileCode2, Terminal,
   Folder, FolderOpen, ChevronRight, FilePlus, RotateCw, PanelLeftClose, PanelLeftOpen,
+  PanelLeft, PanelRight, PanelBottom,
 } from 'lucide-react';
 import {
   createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile,
@@ -127,20 +130,33 @@ function StatusDot({ running }: { running: boolean }) {
   );
 }
 
-// 编码 IDE 中央：只读代码查看（行号槽，编辑器感）
-function CodeView({ content }: { content?: string }) {
+// 文件扩展名 → Prism 语言 id（语法高亮）
+const EXT_LANG: Record<string, string> = {
+  py: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', jsx: 'jsx', tsx: 'tsx',
+  json: 'json', md: 'markdown', css: 'css', scss: 'scss', less: 'less', html: 'markup', xml: 'markup', svg: 'markup',
+  sh: 'bash', bash: 'bash', zsh: 'bash', go: 'go', rs: 'rust', yml: 'yaml', yaml: 'yaml', toml: 'toml', sql: 'sql',
+  java: 'java', kt: 'kotlin', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', hpp: 'cpp', cs: 'csharp', rb: 'ruby', php: 'php',
+  swift: 'swift', lua: 'lua', dockerfile: 'docker', ini: 'ini', cfg: 'ini',
+};
+function langOf(path?: string): string {
+  const ext = (path || '').split('.').pop()?.toLowerCase() || '';
+  return EXT_LANG[ext] || 'text';
+}
+
+// 编码 IDE 中央：只读代码查看（语法高亮 + 行号）
+function CodeView({ content, path }: { content?: string; path?: string }) {
   if (content === undefined) return <div className="p-5 text-[12.5px]" style={{ color: 'var(--color-ink-3)' }}>加载中…</div>;
-  const lines = content.split('\n');
+  if (content === '') return <div className="p-5 text-[12.5px]" style={{ color: 'var(--color-ink-3)' }}>空文件。</div>;
   return (
     <div className="h-full overflow-auto no-scrollbar">
-      <pre className="text-[12px] font-mono leading-[1.6] py-2">
-        {lines.map((line, i) => (
-          <div key={i} className="flex">
-            <span className="select-none text-right shrink-0" style={{ width: 44, paddingRight: 12, color: 'var(--color-ink-3)', opacity: 0.5 }}>{i + 1}</span>
-            <span style={{ whiteSpace: 'pre', color: 'var(--color-ink)', paddingRight: 14 }}>{line || ' '}</span>
-          </div>
-        ))}
-      </pre>
+      <SyntaxHighlighter
+        language={langOf(path)} style={oneDark} showLineNumbers wrapLongLines={false}
+        customStyle={{ margin: 0, minHeight: '100%', background: 'transparent', fontSize: '12px', padding: '8px 2px', lineHeight: 1.6 }}
+        lineNumberStyle={{ minWidth: '2.8em', paddingRight: '1.1em', color: 'var(--color-ink-3)', opacity: 0.5, userSelect: 'none' }}
+        codeTagProps={{ style: { fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace" } }}
+      >
+        {content}
+      </SyntaxHighlighter>
     </div>
   );
 }
@@ -230,6 +246,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [fileCache, setFileCache] = useState<Record<string, string>>({});
   const [navCollapsed, setNavCollapsed] = useState(false);     // 编码模式自动折叠左侧栏
+  const [ideTree, setIdeTree] = useState(true);                // IDE 三面板可折叠：文件树/终端/对话
+  const [ideTerm, setIdeTerm] = useState(true);
+  const [ideChat, setIdeChat] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamId = useRef<string | null>(null);
 
@@ -537,6 +556,7 @@ export default function App() {
               <div className="flex-1 flex flex-col min-w-0">
                 <div className="flex flex-1 min-h-0">
                   {/* 文件树 / 资源管理器 */}
+                  {ideTree && (
                   <aside className="w-[232px] shrink-0 hidden md:flex flex-col relative z-10" style={{ background: 'var(--color-panel)', boxShadow: '8px 0 28px -16px rgba(0,0,0,0.9)' }}>
                     <div className="h-9 flex items-center gap-0.5 pl-4 pr-2 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
                       <span className="label truncate flex-1" title={wsCustom ? wsName : '会话工作区'}>
@@ -545,6 +565,7 @@ export default function App() {
                       <button onClick={openFolder} title="打开文件夹" className="btn btn-ghost p-1.5"><FolderOpen className="w-3.5 h-3.5" /></button>
                       <button onClick={createFile} title="新建文件" className="btn btn-ghost p-1.5"><FilePlus className="w-3.5 h-3.5" /></button>
                       <button onClick={() => refreshFiles(sessionId)} title="刷新" className="btn btn-ghost p-1.5"><RotateCw className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => setIdeTree(false)} title="折叠" className="btn btn-ghost p-1.5"><PanelLeftClose className="w-3.5 h-3.5" /></button>
                     </div>
                     <div className="flex-1 overflow-y-auto no-scrollbar py-1.5">
                       {files.length === 0 ? (
@@ -562,22 +583,30 @@ export default function App() {
                       <button onClick={closeFolder} className="text-[11px] px-4 py-2 text-left shrink-0" style={{ color: 'var(--color-ink-3)', borderTop: '1px solid var(--color-line)' }}>← 关闭文件夹（回默认工作区）</button>
                     )}
                   </aside>
+                  )}
 
                   {/* 编辑器：标签页 + 内容 */}
                   <div className="flex-1 flex flex-col min-w-0" style={{ background: 'radial-gradient(760px 340px at 50% -6%, rgba(224,144,90,0.05), transparent 70%), var(--color-bg)' }}>
-                    <div className="h-9 flex items-stretch shrink-0 overflow-x-auto no-scrollbar relative z-10" style={{ background: 'var(--color-panel)', boxShadow: '0 6px 16px -10px rgba(0,0,0,0.8)' }}>
-                      {openTabs.length === 0 && <div className="flex items-center px-4 text-[12px]" style={{ color: 'var(--color-ink-3)' }}>编辑器</div>}
-                      {openTabs.map((t) => {
-                        const on = activeTab === t; const changed = changes.some((c) => c.path === t);
-                        return (
-                          <div key={t} onClick={() => setActiveTab(t)} className="flex items-center gap-1.5 px-3 cursor-pointer text-[12px] font-mono shrink-0"
-                            style={{ borderRight: '1px solid var(--color-line)', background: on ? 'var(--color-bg)' : 'transparent', color: on ? 'var(--color-ink)' : 'var(--color-ink-3)', boxShadow: on ? 'inset 0 2px 0 var(--color-gold)' : 'none' }}>
-                            {changed && <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-gold)' }} />}
-                            {t.split('/').pop()}
-                            <button onClick={(e) => { e.stopPropagation(); closeTab(t); }} className="opacity-40 hover:opacity-100 ml-0.5"><X className="w-3 h-3" /></button>
-                          </div>
-                        );
-                      })}
+                    <div className="h-9 flex items-stretch shrink-0 relative z-10" style={{ background: 'var(--color-panel)', boxShadow: '0 6px 16px -10px rgba(0,0,0,0.8)' }}>
+                      <div className="flex items-stretch overflow-x-auto no-scrollbar flex-1 min-w-0">
+                        {openTabs.length === 0 && <div className="flex items-center px-4 text-[12px]" style={{ color: 'var(--color-ink-3)' }}>编辑器</div>}
+                        {openTabs.map((t) => {
+                          const on = activeTab === t; const changed = changes.some((c) => c.path === t);
+                          return (
+                            <div key={t} onClick={() => setActiveTab(t)} className="flex items-center gap-1.5 px-3 cursor-pointer text-[12px] font-mono shrink-0"
+                              style={{ borderRight: '1px solid var(--color-line)', background: on ? 'var(--color-bg)' : 'transparent', color: on ? 'var(--color-ink)' : 'var(--color-ink-3)', boxShadow: on ? 'inset 0 2px 0 var(--color-gold)' : 'none' }}>
+                              {changed && <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-gold)' }} />}
+                              {t.split('/').pop()}
+                              <button onClick={(e) => { e.stopPropagation(); closeTab(t); }} className="opacity-40 hover:opacity-100 ml-0.5"><X className="w-3 h-3" /></button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="flex items-center gap-0.5 px-2 shrink-0" style={{ borderLeft: '1px solid var(--color-line)' }}>
+                        <button onClick={() => setIdeTree((v) => !v)} title="资源管理器" className="btn btn-ghost p-1.5" style={{ color: ideTree ? 'var(--color-gold)' : 'var(--color-ink-3)' }}><PanelLeft className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => setIdeTerm((v) => !v)} title="终端" className="btn btn-ghost p-1.5" style={{ color: ideTerm ? 'var(--color-gold)' : 'var(--color-ink-3)' }}><PanelBottom className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => setIdeChat((v) => !v)} title="对话" className="btn btn-ghost p-1.5" style={{ color: ideChat ? 'var(--color-gold)' : 'var(--color-ink-3)' }}><PanelRight className="w-3.5 h-3.5" /></button>
+                      </div>
                     </div>
                     {activeTab && (
                       <div className="px-4 py-1 text-[11px] font-mono shrink-0 flex items-center gap-1.5" style={{ color: 'var(--color-ink-3)', borderBottom: '1px solid var(--color-line)', background: 'var(--color-panel)' }}>
@@ -595,17 +624,19 @@ export default function App() {
                         const ch = changes.find((c) => c.path === activeTab);
                         return ch
                           ? <div className="h-full overflow-auto no-scrollbar p-3"><DiffCard ch={ch} onKeep={() => keepChange(ch.path)} onRevert={() => revertChange(ch)} /></div>
-                          : <CodeView content={fileCache[activeTab]} />;
+                          : <CodeView content={fileCache[activeTab]} path={activeTab} />;
                       })()}
                     </div>
                   </div>
                 </div>
 
                 {/* 终端 · 执行轨迹 */}
+                {ideTerm && (
                 <div className="shrink-0 flex flex-col relative z-10" style={{ height: 188, background: 'var(--color-panel)', boxShadow: '0 -8px 22px -12px rgba(0,0,0,0.85)' }}>
                   <div className="h-9 flex items-center px-4 gap-2 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
                     <Terminal className="w-3.5 h-3.5" style={{ color: 'var(--color-ink-3)' }} />
                     <span className="label">终端 · 执行轨迹</span>
+                    <button onClick={() => setIdeTerm(false)} title="折叠" className="btn btn-ghost p-1.5 ml-auto"><PanelBottom className="w-3.5 h-3.5" /></button>
                   </div>
                   <div className="flex-1 overflow-y-auto no-scrollbar px-4 py-2 font-mono text-[12px] leading-[1.75]">
                     {trace.length === 0 && <div style={{ color: 'var(--color-ink-3)' }}>工具调用会实时出现在这里。</div>}
@@ -620,16 +651,20 @@ export default function App() {
                     ))}
                   </div>
                 </div>
+                )}
               </div>
 
               {/* 对话面板 */}
+              {ideChat && (
               <aside className="w-[360px] shrink-0 hidden lg:flex flex-col relative z-10" style={{ background: 'var(--color-panel)', boxShadow: '-8px 0 28px -16px rgba(0,0,0,0.9)' }}>
                 <div className="h-9 flex items-center px-4 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
                   <span className="label flex items-center gap-2"><MessageSquare className="w-3.5 h-3.5" /> 对话</span>
+                  <button onClick={() => setIdeChat(false)} title="折叠" className="btn btn-ghost p-1.5 ml-auto"><PanelRight className="w-3.5 h-3.5" /></button>
                 </div>
                 <div ref={scrollRef} className="flex-1 overflow-y-auto no-scrollbar px-4 py-4">{renderMessages(true)}</div>
                 <div className="p-3" style={{ borderTop: '1px solid var(--color-line)' }}>{composer(false)}</div>
               </aside>
+              )}
             </>
           )}
         </div>
