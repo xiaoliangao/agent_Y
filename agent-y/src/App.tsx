@@ -219,6 +219,35 @@ function FileTree({ files, activeTab, changedPaths, onOpen }: {
   return <>{tree.map((n) => render(n, 0))}</>;
 }
 
+// IDE 拖拽分隔条：col=左右调宽，row=上下调高；invert 用于右/下侧面板（朝相反方向变大）。
+function ResizeHandle({ dir, get, set, min, max, invert }: {
+  dir: 'col' | 'row'; get: () => number; set: (n: number) => void; min: number; max: number; invert?: boolean;
+}) {
+  const onDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const start = dir === 'col' ? e.clientX : e.clientY;
+    const startSize = get();
+    const move = (ev: MouseEvent) => {
+      const cur = dir === 'col' ? ev.clientX : ev.clientY;
+      const d = (cur - start) * (invert ? -1 : 1);
+      set(Math.max(min, Math.min(max, startSize + d)));
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      document.body.style.cursor = ''; document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    document.body.style.cursor = dir === 'col' ? 'col-resize' : 'row-resize';
+    document.body.style.userSelect = 'none';
+  };
+  return (
+    <div onMouseDown={onDown} title="拖动调整大小" className={`rs rs-${dir} shrink-0 self-stretch relative z-20`}
+      style={{ cursor: dir === 'col' ? 'col-resize' : 'row-resize', width: dir === 'col' ? 6 : undefined, height: dir === 'row' ? 6 : undefined }} />
+  );
+}
+
 export default function App() {
   const [scene, setScene] = useState<'coding' | 'assistant'>('assistant');
   const [threads, setThreads] = useState<SessionSummary[]>([]);
@@ -250,6 +279,9 @@ export default function App() {
   const [ideTree, setIdeTree] = useState(true);                // IDE 三面板可折叠：文件树/终端/对话
   const [ideTerm, setIdeTerm] = useState(true);
   const [ideChat, setIdeChat] = useState(true);
+  const [treeW, setTreeW] = useState(232);                     // IDE 面板可拖拽调整大小
+  const [chatW, setChatW] = useState(360);
+  const [termH, setTermH] = useState(188);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamId = useRef<string | null>(null);
 
@@ -575,7 +607,7 @@ export default function App() {
                 <div className="flex flex-1 min-h-0">
                   {/* 文件树 / 资源管理器 */}
                   {ideTree && (
-                  <aside className="w-[232px] shrink-0 hidden md:flex flex-col relative z-10" style={{ background: 'var(--color-panel)', boxShadow: '8px 0 28px -16px rgba(0,0,0,0.9)' }}>
+                  <aside className="shrink-0 hidden md:flex flex-col relative z-10" style={{ width: treeW, background: 'var(--color-panel)', boxShadow: '8px 0 28px -16px rgba(0,0,0,0.9)' }}>
                     <div className="h-9 flex items-center gap-0.5 pl-4 pr-2 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
                       <span className="label truncate flex-1" title={wsCustom ? wsName : '会话工作区'}>
                         {wsCustom ? wsName : '工作区'}
@@ -602,6 +634,7 @@ export default function App() {
                     )}
                   </aside>
                   )}
+                  {ideTree && <ResizeHandle dir="col" get={() => treeW} set={setTreeW} min={150} max={520} />}
 
                   {/* 编辑器：标签页 + 内容 */}
                   <div className="flex-1 flex flex-col min-w-0" style={{ background: 'radial-gradient(760px 340px at 50% -6%, rgba(224,144,90,0.05), transparent 70%), var(--color-bg)' }}>
@@ -649,8 +682,9 @@ export default function App() {
                 </div>
 
                 {/* 终端 · 执行轨迹 */}
+                {ideTerm && <ResizeHandle dir="row" get={() => termH} set={setTermH} min={80} max={560} invert />}
                 {ideTerm && (
-                <div className="shrink-0 flex flex-col relative z-10" style={{ height: 188, background: 'var(--color-panel)', boxShadow: '0 -8px 22px -12px rgba(0,0,0,0.85)' }}>
+                <div className="shrink-0 flex flex-col relative z-10" style={{ height: termH, background: 'var(--color-panel)', boxShadow: '0 -8px 22px -12px rgba(0,0,0,0.85)' }}>
                   <div className="h-9 flex items-center px-4 gap-2 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
                     <Terminal className="w-3.5 h-3.5" style={{ color: 'var(--color-ink-3)' }} />
                     <span className="label">终端 · 执行轨迹</span>
@@ -673,8 +707,9 @@ export default function App() {
               </div>
 
               {/* 对话面板 */}
+              {ideChat && <ResizeHandle dir="col" get={() => chatW} set={setChatW} min={260} max={620} invert />}
               {ideChat && (
-              <aside className="w-[360px] shrink-0 hidden lg:flex flex-col relative z-10" style={{ background: 'var(--color-panel)', boxShadow: '-8px 0 28px -16px rgba(0,0,0,0.9)' }}>
+              <aside className="shrink-0 hidden lg:flex flex-col relative z-10" style={{ width: chatW, background: 'var(--color-panel)', boxShadow: '-8px 0 28px -16px rgba(0,0,0,0.9)' }}>
                 <div className="h-9 flex items-center px-4 shrink-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
                   <span className="label flex items-center gap-2"><MessageSquare className="w-3.5 h-3.5" /> 对话</span>
                   <button onClick={() => setIdeChat(false)} title="折叠" className="btn btn-ghost p-1.5 ml-auto"><PanelRight className="w-3.5 h-3.5" /></button>

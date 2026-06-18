@@ -106,6 +106,13 @@
 .md th, .md td { border: 1px solid var(--color-line); padding: .25em .55em; text-align: left; }
 .md th { background: rgba(127,127,127,0.08); font-weight: 600; }
 
+/* IDE 面板拖拽分隔条：平时一条发丝线，悬停/拖动变陶土橙 */
+.rs { position: relative; }
+.rs::after { content: ''; position: absolute; background: var(--color-line); transition: background .12s; }
+.rs-col::after { inset: 0 2px; }
+.rs-row::after { inset: 2px 0; }
+.rs:hover::after { background: var(--color-gold); }
+
 * { border-color: var(--color-line); }
 
 html, body, #root { height: 100%; }
