@@ -31,6 +31,7 @@ export interface Settings {
   models?: Record<string, string>;  // 按角色配模型 {orchestrator|subagent|judge}（F1.4）
   approval_mode: string | null; sandbox?: string;
   weather_city?: string; weather_label?: string;  // 日常面板天气城市（手动）
+  proxy?: string;  // 网络代理：auto / 空 / http://host:port
 }
 export interface Todo { id: string; text: string; done: boolean; due?: string | null; created_at: string; }
 export interface Folder { id: string; path: string; mode: string; }

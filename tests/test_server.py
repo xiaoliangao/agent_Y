@@ -306,6 +306,14 @@ async def test_skill_install_endpoint(tmp_path):
         assert (await client.post("/skills/install", json={"path": str(tmp_path / "nope")})).status_code == 400
 
 
+def test_resolve_proxy():
+    from server.app import _resolve_proxy
+
+    assert _resolve_proxy("") == "" and _resolve_proxy("   ") == ""
+    assert _resolve_proxy("http://127.0.0.1:7897") == "http://127.0.0.1:7897"
+    assert isinstance(_resolve_proxy("auto"), str)  # auto 读系统代理，可能空也可能有，至少是 str
+
+
 async def test_delete_session(tmp_path):
     app = _app(tmp_path, MockProvider([]))
     async with _client(app) as client:

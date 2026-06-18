@@ -92,6 +92,7 @@ class SettingsIn(BaseModel):
     approval_mode: str | None = None
     sandbox: str | None = None  # local | docker
     weather_city: str | None = None  # 日常面板天气城市（手动）
+    proxy: str | None = None  # 网络代理：auto / 空 / http://host:port
 
 
 class AutomationIn(BaseModel):
@@ -180,6 +181,32 @@ def _active_model(app: FastAPI, role: str = "orchestrator") -> str:
     if conn and conn.get("model_default"):
         return conn["model_default"]
     return app.state.model
+
+
+def _resolve_proxy(value: str) -> str:
+    """代理设置 → 实际代理 URL。auto=读系统/环境代理；留空=不用；否则原样。"""
+    v = (value or "").strip()
+    if not v:
+        return ""
+    if v.lower() == "auto":
+        import urllib.request
+
+        p = urllib.request.getproxies()  # macOS 会读系统网络代理（打包后也能读到）
+        return p.get("https") or p.get("http") or ""
+    return v
+
+
+def _apply_proxy(app: FastAPI) -> None:
+    """把代理设置落到进程环境变量：httpx(trust_env) 的外联请求即走代理；回环始终绕过。"""
+    proxy = _resolve_proxy(app.state.settings.get().get("proxy", ""))
+    for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        if proxy:
+            os.environ[k] = proxy
+        else:
+            os.environ.pop(k, None)
+    for k in ("NO_PROXY", "no_proxy"):  # 自连后端/健康检查不走代理
+        if "127.0.0.1" not in os.environ.get(k, ""):
+            os.environ[k] = (os.environ.get(k, "") + ",127.0.0.1,localhost,::1").lstrip(",")
 
 
 _WEEK = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -443,6 +470,7 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
     from core.skills.store import FileSkillStore
 
     app.state.skills = FileSkillStore(os.path.join(data_dir, "skills"))  # 用户导入的技能（渐进披露）
+    _apply_proxy(app)  # 按设置的代理落进程环境（外联走代理；打包后 Finder 启动不继承 shell 代理时尤其需要）
 
     @app.exception_handler(HTTPException)
     async def _http_exc(_req: Request, exc: HTTPException):  # 统一错误信封（design §4.0）
@@ -724,7 +752,9 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
 
     @app.put("/settings")
     async def put_settings(body: SettingsIn, request: Request):
-        return {"settings": request.app.state.settings.update(**body.model_dump(exclude_none=True))}
+        s = request.app.state.settings.update(**body.model_dump(exclude_none=True))
+        _apply_proxy(request.app)  # 代理改了即时生效
+        return {"settings": s}
 
     @app.get("/weather")
     async def get_weather_ep(request: Request):  # 日常面板：今天/明天天气 + 建议（手动城市）

@@ -34,6 +34,8 @@ _DEFAULTS = {
     "models": {},  # 按角色配模型：{"orchestrator":..,"subagent":..,"judge":..}；空=用 default_model（F1.4）
     "approval_mode": None,  # None = 沿用 app 默认；显式设了才覆盖。read_only|ask|auto|full
     "sandbox": "local",  # local（宿主机跑，开发友好）| docker（容器隔离，需装 Docker）
+    # 网络代理（web_search/web_fetch/天气 等外联走它）：auto=自动读系统代理 / 留空=不用 / 或 http://127.0.0.1:7897
+    "proxy": "auto",
     # 日常面板天气（手动城市，隐私优先；lat/lon/label 为 geocode 后的缓存，UI 不直接编辑）
     "weather_city": "",
     "weather_lat": None,
