@@ -286,6 +286,7 @@ export default function App() {
   const streamId = useRef<string | null>(null);
   const sceneSessionRef = useRef<Record<'assistant' | 'coding', string | null>>({ assistant: null, coding: null });
   const prevSceneRef = useRef(scene);
+  const lastFolderRef = useRef<string | null>(localStorage.getItem('agenty.lastFolder'));  // 编码：记住上次打开的文件夹，新对话自动沿用
 
   const refreshThreads = () => listSessions().then(setThreads).catch(() => {});
   const refreshConfig = () => {
@@ -347,6 +348,8 @@ export default function App() {
     if (!path || !path.trim()) return;
     const sid = await ensureSession();
     await setWorkspace(sid, path.trim()).catch(() => {});
+    lastFolderRef.current = path.trim();
+    localStorage.setItem('agenty.lastFolder', path.trim());  // 记住，新编码对话自动沿用
     setOpenTabs([]); setActiveTab(null); setFileCache({});
     refreshFiles(sid);
   };
@@ -362,6 +365,8 @@ export default function App() {
   const closeFolder = async () => {
     if (!sessionId) return;
     await clearWorkspace(sessionId).catch(() => {});
+    lastFolderRef.current = null;
+    localStorage.removeItem('agenty.lastFolder');  // 不再自动沿用
     setOpenTabs([]); setActiveTab(null); setFileCache({});
     refreshFiles(sessionId);
   };
@@ -398,7 +403,11 @@ export default function App() {
     streamId.current = null;
     try {
       let sid = sessionId;
-      if (!sid) { sid = await createSession(text.slice(0, 40), scene); setSessionId(sid); }
+      if (!sid) {
+        sid = await createSession(text.slice(0, 40), scene);
+        setSessionId(sid);
+        if (scene === 'coding' && lastFolderRef.current) await setWorkspace(sid, lastFolderRef.current).catch(() => {});  // 新编码对话沿用上次文件夹
+      }
       for await (const fr of streamMessage(sid, text)) onFrame(fr);
       refreshThreads();
       refreshFiles(sid);  // 跑完刷新工作区文件树
