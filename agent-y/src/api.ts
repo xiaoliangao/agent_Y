@@ -72,6 +72,8 @@ export const postApproval = (approvalId: string, decision: "allow" | "deny") =>
   post(`/approvals/${approvalId}`, { decision });
 export const interruptSession = (sid: string) => post(`/sessions/${sid}/interrupt`);
 export const deleteSession = (sid: string) => j(`/sessions/${sid}`, { method: "DELETE" });
+export const renameSession = (sid: string, title: string) =>
+  j(`/sessions/${sid}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ title }) });
 export const revertFile = (sid: string, path: string, content: string) => post(`/sessions/${sid}/revert`, { path, content });
 
 // 编码 IDE：工作区文件树 / 读单文件 / 打开文件夹 / 新建文件

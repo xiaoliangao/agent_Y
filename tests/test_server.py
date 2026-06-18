@@ -314,6 +314,17 @@ def test_resolve_proxy():
     assert isinstance(_resolve_proxy("auto"), str)  # auto 读系统代理，可能空也可能有，至少是 str
 
 
+async def test_rename_session(tmp_path):
+    app = _app(tmp_path, MockProvider([]))
+    async with _client(app) as client:
+        sid = (await client.post("/sessions", json={"title": "old"})).json()["session_id"]
+        r = await client.patch(f"/sessions/{sid}", json={"title": "新名字"})
+        assert r.status_code == 200 and r.json()["title"] == "新名字"
+        assert (await client.get(f"/sessions/{sid}")).json()["session"]["title"] == "新名字"
+        assert (await client.patch("/sessions/nope", json={"title": "x"})).status_code == 404
+        assert (await client.patch(f"/sessions/{sid}", json={"title": "  "})).status_code == 400
+
+
 async def test_delete_session(tmp_path):
     app = _app(tmp_path, MockProvider([]))
     async with _client(app) as client:

@@ -10,7 +10,7 @@ import {
   PanelLeft, PanelRight, PanelBottom,
 } from 'lucide-react';
 import {
-  createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile, interruptSession, deleteSession,
+  createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile, interruptSession, deleteSession, renameSession,
   listProviders, getSettings, listReviews,
   listTodos, addTodo, patchTodo, deleteTodo, listFolders, addFolder, deleteFolder,
   getWeather, hasNativeFolderPick, pickFolderNative,
@@ -284,6 +284,8 @@ export default function App() {
   const [termH, setTermH] = useState(188);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamId = useRef<string | null>(null);
+  const sceneSessionRef = useRef<Record<'assistant' | 'coding', string | null>>({ assistant: null, coding: null });
+  const prevSceneRef = useRef(scene);
 
   const refreshThreads = () => listSessions().then(setThreads).catch(() => {});
   const refreshConfig = () => {
@@ -412,8 +414,13 @@ export default function App() {
   const selectThread = async (id: string) => { setSessionId(id); resetWorkspace(); setMessages(toChat(await getSessionMessages(id))); refreshFiles(id); };
   const removeThread = async (id: string) => {
     await deleteSession(id).catch(() => {});
+    (['assistant', 'coding'] as const).forEach((s) => { if (sceneSessionRef.current[s] === id) sceneSessionRef.current[s] = null; });
     if (id === sessionId) newThread();
     refreshThreads();
+  };
+  const renameThread = async (id: string, cur: string) => {
+    const name = window.prompt('重命名会话：', cur);
+    if (name && name.trim() && name.trim() !== cur) { await renameSession(id, name.trim()).catch(() => {}); refreshThreads(); }
   };
   const keepChange = (path: string) => {
     setChanges((p) => p.filter((c) => c.path !== path));
@@ -424,8 +431,16 @@ export default function App() {
     setChanges((p) => p.filter((c) => c.path !== ch.path));
     setFileCache((c) => ({ ...c, [ch.path]: ch.old }));
   };
-  // 日常 / 编码 对话独立：切场景就开一段新对话（左侧「最近」也按场景过滤）
-  useEffect(() => { newThread(); /* eslint-disable-next-line */ }, [scene]);
+  // 日常 / 编码 对话独立：切场景时存下当前会话、恢复目标场景上次打开的会话（无则开新）。「最近」也按场景过滤。
+  useEffect(() => {
+    const prev = prevSceneRef.current;
+    if (prev === scene) return;  // 挂载首帧跳过
+    sceneSessionRef.current[prev] = sessionId;
+    prevSceneRef.current = scene;
+    const restore = sceneSessionRef.current[scene];
+    if (restore) selectThread(restore); else newThread();
+    /* eslint-disable-next-line */
+  }, [scene]);
 
   // 对话消息流（助手宽版 / 编码窄版共用）
   const renderMessages = (narrow: boolean) => (
@@ -548,7 +563,8 @@ export default function App() {
             return (
               <div key={th.id} className="group w-full flex items-center gap-1 pl-2.5 pr-1.5 py-2 rounded-lg transition-colors mb-0.5"
                 style={on ? { background: 'var(--color-elevated)', boxShadow: 'inset 2px 0 0 var(--color-gold)' } : {}}>
-                <button onClick={() => selectThread(th.id)} className="flex items-center gap-2.5 min-w-0 flex-1 text-left">
+                <button onClick={() => selectThread(th.id)} onDoubleClick={() => renameThread(th.id, th.title)} title="双击重命名"
+                  className="flex items-center gap-2.5 min-w-0 flex-1 text-left">
                   <MessageSquare className="w-3.5 h-3.5 shrink-0" style={{ color: on ? 'var(--color-gold)' : 'var(--color-ink-3)' }} />
                   <span className="text-[13px] truncate" style={{ color: on ? 'var(--color-ink)' : 'var(--color-ink-2)' }}>{th.title}</span>
                 </button>

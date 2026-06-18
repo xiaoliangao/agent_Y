@@ -338,6 +338,13 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
     sub_model = _active_model(app, "subagent")  # 子 agent 可配更便宜的跑量模型
     settings = app.state.settings.get()
     system = _runtime_preamble(app, model) + "\n\n" + app.state.settings.effective_system(scenario.system_prompt())
+    if getattr(scenario, "name", "") == "assistant":  # 把已授权目录告诉模型，否则它不知道自己能访问哪
+        folders = app.state.fs.list()
+        if folders:
+            system += "\n\n# 已授权目录（你可以直接在这些目录里读 / 搜 / 写文件、生成办公文档，无需再让用户授权）\n" + \
+                "\n".join(f"- {f['path']}（{f.get('mode', 'read_write')}）" for f in folders)
+        else:
+            system += "\n\n（当前没有已授权目录。需要读写本地文件时，提示用户点输入框的 📎 选择一个文件夹授权。）"
     approval = _APPROVAL.get(settings.get("approval_mode", ""), app.state.approval_mode)
     # 上下文压缩（始终开，便宜）+ 长期记忆（按 app.state.memory_enabled，跨会话共享）
     from core.harness.context import ContextManager, context_window_for
@@ -506,6 +513,14 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
         if not s:
             raise HTTPException(404, "session_not_found")
         return {"session": s, "messages": request.app.state.store.get_messages(sid)}
+
+    @app.patch("/sessions/{sid}")
+    async def rename_session(sid: str, body: SessionIn, request: Request):  # 重命名会话
+        if not (body.title or "").strip():
+            raise HTTPException(400, "empty_title")
+        if not request.app.state.store.rename_session(sid, body.title.strip()):
+            raise HTTPException(404, "session_not_found")
+        return {"ok": True, "title": body.title.strip()}
 
     @app.delete("/sessions/{sid}")
     async def delete_session(sid: str, request: Request):
