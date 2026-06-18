@@ -479,6 +479,22 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
             raise HTTPException(404, "session_not_found")
         return {"session": s, "messages": request.app.state.store.get_messages(sid)}
 
+    @app.delete("/sessions/{sid}")
+    async def delete_session(sid: str, request: Request):
+        st = request.app.state
+        run = st.runs.get(sid)
+        if run:  # 正在跑的先中断
+            run["engine"].interrupt()
+        if not st.store.delete_session(sid):
+            raise HTTPException(404, "session_not_found")
+        # 清掉「打开的文件夹」记录（只去映射，不删用户真实项目目录）+ 本会话自己的工作区目录
+        if st.workspaces.pop(sid, None) is not None:
+            _save_workspaces(request.app)
+        import shutil
+
+        shutil.rmtree(os.path.join(st.data_dir, "sessions", sid), ignore_errors=True)
+        return {"ok": True}
+
     @app.post("/sessions/{sid}/messages")
     async def post_message(sid: str, body: MsgIn, request: Request):
         st = request.app.state

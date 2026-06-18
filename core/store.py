@@ -63,6 +63,12 @@ class Store:
             ).fetchall()
             return [dict(r) for r in rs]
 
+    def delete_session(self, sid: str) -> bool:
+        with self._conn() as c:
+            c.execute("DELETE FROM messages WHERE session_id=?", (sid,))
+            cur = c.execute("DELETE FROM sessions WHERE id=?", (sid,))
+            return cur.rowcount > 0
+
     def set_status(self, sid: str, status: str) -> None:
         with self._conn() as c:
             c.execute("UPDATE sessions SET status=?, updated_at=? WHERE id=?", (status, _now(), sid))

@@ -3,14 +3,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import {
-  Plus, Settings as SettingsIcon, Code2, Briefcase, ArrowUp, X, Square,
+  Plus, Settings as SettingsIcon, Code2, Briefcase, ArrowUp, X, Square, Trash2,
   AlertTriangle, MessageSquare, KeyRound, Clock, Sparkles,
   FolderPlus, FileCode2, Terminal,
   Folder, FolderOpen, ChevronRight, FilePlus, RotateCw, PanelLeftClose, PanelLeftOpen,
   PanelLeft, PanelRight, PanelBottom,
 } from 'lucide-react';
 import {
-  createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile, interruptSession,
+  createSession, listSessions, getSessionMessages, streamMessage, postApproval, revertFile, interruptSession, deleteSession,
   listProviders, getSettings, listReviews,
   listTodos, addTodo, patchTodo, deleteTodo, listFolders, addFolder, deleteFolder,
   getWeather, hasNativeFolderPick, pickFolderNative,
@@ -378,6 +378,11 @@ export default function App() {
   const resetWorkspace = () => { setTrace([]); setChanges([]); setError(null); setOpenTabs([]); setActiveTab(null); setFileCache({}); };
   const newThread = () => { setSessionId(null); setMessages([]); resetWorkspace(); setFiles([]); };
   const selectThread = async (id: string) => { setSessionId(id); resetWorkspace(); setMessages(toChat(await getSessionMessages(id))); refreshFiles(id); };
+  const removeThread = async (id: string) => {
+    await deleteSession(id).catch(() => {});
+    if (id === sessionId) newThread();
+    refreshThreads();
+  };
   const keepChange = (path: string) => {
     setChanges((p) => p.filter((c) => c.path !== path));
     if (sessionId) readWorkspaceFile(sessionId, path).then((r) => setFileCache((c) => ({ ...c, [path]: r.content })));
@@ -509,12 +514,17 @@ export default function App() {
           {sceneThreads.map((th) => {
             const on = th.id === sessionId;
             return (
-              <button key={th.id} onClick={() => selectThread(th.id)}
-                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors mb-0.5"
+              <div key={th.id} className="group w-full flex items-center gap-1 pl-2.5 pr-1.5 py-2 rounded-lg transition-colors mb-0.5"
                 style={on ? { background: 'var(--color-elevated)', boxShadow: 'inset 2px 0 0 var(--color-gold)' } : {}}>
-                <MessageSquare className="w-3.5 h-3.5 shrink-0" style={{ color: on ? 'var(--color-gold)' : 'var(--color-ink-3)' }} />
-                <span className="text-[13px] truncate" style={{ color: on ? 'var(--color-ink)' : 'var(--color-ink-2)' }}>{th.title}</span>
-              </button>
+                <button onClick={() => selectThread(th.id)} className="flex items-center gap-2.5 min-w-0 flex-1 text-left">
+                  <MessageSquare className="w-3.5 h-3.5 shrink-0" style={{ color: on ? 'var(--color-gold)' : 'var(--color-ink-3)' }} />
+                  <span className="text-[13px] truncate" style={{ color: on ? 'var(--color-ink)' : 'var(--color-ink-2)' }}>{th.title}</span>
+                </button>
+                <button onClick={() => removeThread(th.id)} title="删除会话"
+                  className="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[rgba(127,127,127,0.15)]">
+                  <Trash2 className="w-3.5 h-3.5" style={{ color: 'var(--color-ink-3)' }} />
+                </button>
+              </div>
             );
           })}
         </div>

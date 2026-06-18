@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import {
   MessageCircle, Sparkles, BookOpen, Calendar, Send, Paperclip, Square,
@@ -47,6 +47,10 @@ export interface AssistantPaperProps {
 }
 
 export default function AssistantPaper(p: AssistantPaperProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [p.messages, p.running]);
   const pending = p.todos.filter((t) => !t.done).length;
   const progress = p.todos.length ? Math.round(p.todos.filter((t) => t.done).length / p.todos.length * 100) : 0;
   const cur = p.weather?.current;
@@ -162,7 +166,7 @@ export default function AssistantPaper(p: AssistantPaperProps) {
               )}
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar">
               {p.messages.length === 0 && (
                 <div className="flex justify-start">
                   <div className="w-7 h-7 rounded-full flex items-center justify-center mr-2 flex-shrink-0 mt-1" style={{ background: '#f4a261', border: '2px solid #2d2926', boxShadow: '2px 2px 0 #2d2926' }}>

@@ -306,6 +306,17 @@ async def test_skill_install_endpoint(tmp_path):
         assert (await client.post("/skills/install", json={"path": str(tmp_path / "nope")})).status_code == 400
 
 
+async def test_delete_session(tmp_path):
+    app = _app(tmp_path, MockProvider([]))
+    async with _client(app) as client:
+        sid = (await client.post("/sessions", json={"title": "t"})).json()["session_id"]
+        assert any(s["id"] == sid for s in (await client.get("/sessions")).json()["sessions"])
+        assert (await client.delete(f"/sessions/{sid}")).json()["ok"]
+        assert (await client.get(f"/sessions/{sid}")).status_code == 404
+        assert all(s["id"] != sid for s in (await client.get("/sessions")).json()["sessions"])
+        assert (await client.delete("/sessions/nope")).status_code == 404
+
+
 async def test_serves_frontend_when_present(tmp_path):
     fe = tmp_path / "fe"
     fe.mkdir()
