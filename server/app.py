@@ -92,6 +92,7 @@ class SettingsIn(BaseModel):
     approval_mode: str | None = None
     sandbox: str | None = None  # local | docker
     weather_city: str | None = None  # 日常面板天气城市（手动）
+    proxy: str | None = None  # 网络代理：auto / 空 / http://host:port
 
 
 class AutomationIn(BaseModel):
@@ -116,6 +117,26 @@ class DecisionIn(BaseModel):
 class RevertIn(BaseModel):
     path: str
     content: str
+
+
+class WorkspaceIn(BaseModel):
+    path: str  # 打开一个文件夹作为该会话的工作区（IDE「打开文件夹」）
+
+
+class NewFileIn(BaseModel):
+    path: str            # 相对工作区的新文件路径
+    content: str | None = None
+
+
+class SkillIn(BaseModel):
+    name: str
+    description: str | None = None
+    when_to_use: str | None = None
+    body: str | None = None
+
+
+class SkillInstallIn(BaseModel):
+    path: str  # 含 SKILL.md 的技能文件夹（或 SKILL.md 文件）路径
 
 
 def _get_provider(app: FastAPI) -> Any:
@@ -162,6 +183,50 @@ def _active_model(app: FastAPI, role: str = "orchestrator") -> str:
     return app.state.model
 
 
+def _resolve_proxy(value: str) -> str:
+    """代理设置 → 实际代理 URL。auto=读系统/环境代理；留空=不用；否则原样。"""
+    v = (value or "").strip()
+    if not v:
+        return ""
+    if v.lower() == "auto":
+        import urllib.request
+
+        p = urllib.request.getproxies()  # macOS 会读系统网络代理（打包后也能读到）
+        return p.get("https") or p.get("http") or ""
+    return v
+
+
+def _apply_proxy(app: FastAPI) -> None:
+    """把代理设置落到进程环境变量：httpx(trust_env) 的外联请求即走代理；回环始终绕过。"""
+    proxy = _resolve_proxy(app.state.settings.get().get("proxy", ""))
+    for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        if proxy:
+            os.environ[k] = proxy
+        else:
+            os.environ.pop(k, None)
+    for k in ("NO_PROXY", "no_proxy"):  # 自连后端/健康检查不走代理
+        if "127.0.0.1" not in os.environ.get(k, ""):
+            os.environ[k] = (os.environ.get(k, "") + ",127.0.0.1,localhost,::1").lstrip(",")
+
+
+_WEEK = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+
+def _runtime_preamble(app: FastAPI, model: str) -> str:
+    """运行信息：真实模型 + 当前本地时间 + 诚实约束。解决「乱报模型/没有实时时间」。"""
+    import datetime
+
+    now = datetime.datetime.now().astimezone()
+    conn = app.state.providers.active()
+    via = f"（{conn['provider']} 接入）" if conn and conn.get("provider") else ""
+    return (
+        f"系统信息：你是 Agent Y 个人助手，背后由用户在设置里配置的模型「{model}」{via}驱动。"
+        f"当前本地时间：{now:%Y-%m-%d %H:%M} {_WEEK[now.weekday()]}。"
+        "被问「你是什么模型」时如实回答上面这个模型 id，切勿冒充 Claude/GPT 等其它厂商模型；"
+        "需要当前日期/时间直接用上面的；天气、新闻、实时赛事等外部信息要用工具查询、不要臆造。"
+    )
+
+
 def _sandbox(app: FastAPI, ws: str) -> Any:
     """按设置选执行器：docker（容器隔离，需装 Docker）或 local（宿主机，开发友好）。"""
     if app.state.settings.get().get("sandbox") == "docker":
@@ -171,6 +236,25 @@ def _sandbox(app: FastAPI, ws: str) -> Any:
     return LocalExecutor(ws)
 
 
+# IDE「打开文件夹」：会话可指定一个真实目录作工作区；否则用默认的 per-session workspace。
+_WS_SKIP = {".git", "__pycache__", "node_modules", "dist", "build", ".venv", "venv",
+            ".next", "target", ".idea", ".vscode", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
+
+
+def _session_ws(app: FastAPI, sid: str) -> str:
+    custom = (getattr(app.state, "workspaces", None) or {}).get(sid)
+    if custom and os.path.isdir(custom):
+        return os.path.realpath(custom)
+    ws = os.path.join(app.state.data_dir, "sessions", sid, "workspace")
+    os.makedirs(ws, exist_ok=True)
+    return os.path.realpath(ws)
+
+
+def _save_workspaces(app: FastAPI) -> None:
+    with open(os.path.join(app.state.data_dir, "workspaces.json"), "w", encoding="utf-8") as f:
+        json.dump(app.state.workspaces, f, ensure_ascii=False)
+
+
 async def _run_automation(app: FastAPI, prompt: str, scenario_name: str) -> str:
     """自动化跑一次 agent（无会话、自动审批），收集助手文本作为产出。"""
     from core.obs.tracer import build_tracer
@@ -178,10 +262,16 @@ async def _run_automation(app: FastAPI, prompt: str, scenario_name: str) -> str:
     scenario: Any = AssistantScenario(app.state.fs) if scenario_name == "assistant" else CodingScenario()
     ws = os.path.join(app.state.data_dir, "automations_ws")
     os.makedirs(ws, exist_ok=True)
+    model = _active_model(app)
+    tools = list(scenario.tools())
+    if scenario_name == "assistant":
+        from core.tools.todo import AddReminderTool, AddTodoTool
+
+        tools += [AddTodoTool(app.state.scheduler), AddReminderTool(app.state.scheduler)]
     eng = SessionEngine(
-        provider=_get_provider(app), tools=scenario.tools(),
-        system=app.state.settings.effective_system(scenario.system_prompt()),
-        sandbox=_sandbox(app, ws), model=_active_model(app),
+        provider=_get_provider(app), tools=tools,
+        system=_runtime_preamble(app, model) + "\n\n" + app.state.settings.effective_system(scenario.system_prompt()),
+        sandbox=_sandbox(app, ws), model=model,
         approval_mode=ApprovalMode.AUTO, tracer=build_tracer(console=False),
     )
     parts: list[str] = []
@@ -242,13 +332,19 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
         scenario: Any = AssistantScenario(app.state.fs)
     else:
         scenario = CodingScenario()
-    workspace = os.path.join(app.state.data_dir, "sessions", sid, "workspace")
-    os.makedirs(workspace, exist_ok=True)
+    workspace = _session_ws(app, sid)  # 默认 per-session，或用户「打开文件夹」指定的真实目录
     provider = _get_provider(app)
     model = _active_model(app, "orchestrator")  # 会话主 loop（F1.4）
     sub_model = _active_model(app, "subagent")  # 子 agent 可配更便宜的跑量模型
     settings = app.state.settings.get()
-    system = app.state.settings.effective_system(scenario.system_prompt())  # 人设 + 场景提示词
+    system = _runtime_preamble(app, model) + "\n\n" + app.state.settings.effective_system(scenario.system_prompt())
+    if getattr(scenario, "name", "") == "assistant":  # 把已授权目录告诉模型，否则它不知道自己能访问哪
+        folders = app.state.fs.list()
+        if folders:
+            system += "\n\n# 已授权目录（你可以直接在这些目录里读 / 搜 / 写文件、生成办公文档，无需再让用户授权）\n" + \
+                "\n".join(f"- {f['path']}（{f.get('mode', 'read_write')}）" for f in folders)
+        else:
+            system += "\n\n（当前没有已授权目录。需要读写本地文件时，提示用户点输入框的 📎 选择一个文件夹授权。）"
     approval = _APPROVAL.get(settings.get("approval_mode", ""), app.state.approval_mode)
     # 上下文压缩（始终开，便宜）+ 长期记忆（按 app.state.memory_enabled，跨会话共享）
     from core.harness.context import ContextManager, context_window_for
@@ -264,9 +360,14 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
             os.path.join(app.state.data_dir, "memory"), provider=provider, model=model
         )
     from core.obs.tracer import build_tracer
+    from core.tools.skill import UseSkillTool
     from core.tools.subagent import SpawnAgentTool
 
-    base_tools = scenario.tools()
+    base_tools = scenario.tools() + [UseSkillTool(app.state.skills)]  # 技能渐进披露
+    if getattr(scenario, "name", "") == "assistant":  # 助手能把日程写进待办/提醒
+        from core.tools.todo import AddReminderTool, AddTodoTool
+
+        base_tools += [AddTodoTool(app.state.scheduler), AddReminderTool(app.state.scheduler)]
     # 每个会话带 spawn_agent（子 agent 用同一组工具但不含 spawn 自身，防递归）；子 agent 走 subagent 角色模型
     tools = base_tools + [SpawnAgentTool(provider=provider, model=sub_model, tools=base_tools, system=system)]
     eng = SessionEngine(
@@ -275,6 +376,7 @@ def _build_engine(app: FastAPI, sid: str) -> SessionEngine:
         model=model, approval_mode=approval,
         tracer=build_tracer(console=False), context_manager=context_manager,
         memory_store=memory_store, reflect=memory_store is not None,
+        skill_store=app.state.skills,
     )
     eng.messages = [Message.model_validate(m) for m in app.state.store.get_messages(sid)]
     return eng
@@ -366,6 +468,16 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
         os.path.join(data_dir, "providers.db"), secrets=provider_secrets
     )
     app.state.settings = SettingsStore(os.path.join(data_dir, "settings.json"))  # 人设/默认模型/审批
+    app.state.workspaces = {}  # sid -> 打开的文件夹路径（IDE「打开文件夹」）；持久化到 workspaces.json
+    try:
+        with open(os.path.join(data_dir, "workspaces.json"), encoding="utf-8") as f:
+            app.state.workspaces = json.load(f)
+    except Exception:
+        pass
+    from core.skills.store import FileSkillStore
+
+    app.state.skills = FileSkillStore(os.path.join(data_dir, "skills"))  # 用户导入的技能（渐进披露）
+    _apply_proxy(app)  # 按设置的代理落进程环境（外联走代理；打包后 Finder 启动不继承 shell 代理时尤其需要）
 
     @app.exception_handler(HTTPException)
     async def _http_exc(_req: Request, exc: HTTPException):  # 统一错误信封（design §4.0）
@@ -402,6 +514,30 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
             raise HTTPException(404, "session_not_found")
         return {"session": s, "messages": request.app.state.store.get_messages(sid)}
 
+    @app.patch("/sessions/{sid}")
+    async def rename_session(sid: str, body: SessionIn, request: Request):  # 重命名会话
+        if not (body.title or "").strip():
+            raise HTTPException(400, "empty_title")
+        if not request.app.state.store.rename_session(sid, body.title.strip()):
+            raise HTTPException(404, "session_not_found")
+        return {"ok": True, "title": body.title.strip()}
+
+    @app.delete("/sessions/{sid}")
+    async def delete_session(sid: str, request: Request):
+        st = request.app.state
+        run = st.runs.get(sid)
+        if run:  # 正在跑的先中断
+            run["engine"].interrupt()
+        if not st.store.delete_session(sid):
+            raise HTTPException(404, "session_not_found")
+        # 清掉「打开的文件夹」记录（只去映射，不删用户真实项目目录）+ 本会话自己的工作区目录
+        if st.workspaces.pop(sid, None) is not None:
+            _save_workspaces(request.app)
+        import shutil
+
+        shutil.rmtree(os.path.join(st.data_dir, "sessions", sid), ignore_errors=True)
+        return {"ok": True}
+
     @app.post("/sessions/{sid}/messages")
     async def post_message(sid: str, body: MsgIn, request: Request):
         st = request.app.state
@@ -431,7 +567,7 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
 
     @app.post("/sessions/{sid}/revert")
     async def revert_file(sid: str, body: RevertIn, request: Request):  # diff 审阅「撤销」：写回原内容
-        ws = os.path.realpath(os.path.join(request.app.state.data_dir, "sessions", sid, "workspace"))
+        ws = _session_ws(request.app, sid)
         target = os.path.realpath(os.path.join(ws, body.path))
         if target != ws and not target.startswith(ws + os.sep):
             raise HTTPException(400, "bad_path")  # 防越界
@@ -439,6 +575,78 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
         with open(target, "w", encoding="utf-8") as f:
             f.write(body.content)
         return {"ok": True}
+
+    @app.get("/sessions/{sid}/files")
+    async def list_workspace_files(sid: str, request: Request):  # 编码 IDE：工作区文件树（只读）
+        ws = _session_ws(request.app, sid)
+        custom = (request.app.state.workspaces or {}).get(sid)
+        out: list[dict] = []
+        if os.path.isdir(ws):
+            for root, dirs, fns in os.walk(ws):
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _WS_SKIP]
+                for fn in fns:
+                    if fn.startswith("."):
+                        continue
+                    full = os.path.join(root, fn)
+                    try:
+                        size = os.path.getsize(full)
+                    except OSError:
+                        continue
+                    out.append({"path": os.path.relpath(full, ws), "size": size})
+                    if len(out) >= 3000:  # 大仓库兜底：别把整棵树都吐出来
+                        break
+                if len(out) >= 3000:
+                    break
+        out.sort(key=lambda f: f["path"])
+        return {"root": ws, "name": os.path.basename(ws), "is_custom": bool(custom), "files": out}
+
+    @app.get("/sessions/{sid}/file")
+    async def read_workspace_file(sid: str, path: str, request: Request):  # 编码 IDE：读单个文件（只读、越界防护）
+        ws = _session_ws(request.app, sid)
+        target = os.path.realpath(os.path.join(ws, path))
+        if target != ws and not target.startswith(ws + os.sep):
+            raise HTTPException(400, "bad_path")
+        if not os.path.isfile(target):
+            raise HTTPException(404, "file_not_found")
+        if os.path.getsize(target) > 400_000:
+            return {"path": path, "content": "(文件过大，未加载)", "truncated": True}
+        try:
+            with open(target, encoding="utf-8") as f:
+                content = f.read()
+        except (UnicodeDecodeError, OSError):
+            return {"path": path, "content": "(二进制或无法读取的文件)", "truncated": True}
+        return {"path": path, "content": content, "truncated": False}
+
+    @app.post("/sessions/{sid}/workspace")
+    async def set_workspace(sid: str, body: WorkspaceIn, request: Request):  # IDE「打开文件夹」
+        p = os.path.realpath(os.path.expanduser(body.path.strip()))
+        if not os.path.isdir(p):
+            raise HTTPException(400, "not_a_directory")
+        request.app.state.workspaces[sid] = p
+        _save_workspaces(request.app)
+        return {"root": p, "name": os.path.basename(p), "is_custom": True}
+
+    @app.delete("/sessions/{sid}/workspace")
+    async def clear_workspace(sid: str, request: Request):  # 关掉打开的文件夹，回到默认工作区
+        request.app.state.workspaces.pop(sid, None)
+        _save_workspaces(request.app)
+        return {"ok": True}
+
+    @app.post("/sessions/{sid}/new-file", status_code=201)
+    async def new_workspace_file(sid: str, body: NewFileIn, request: Request):  # IDE「新建文件」
+        ws = _session_ws(request.app, sid)
+        rel = body.path.strip().lstrip("/")
+        if not rel:
+            raise HTTPException(400, "empty_path")
+        target = os.path.realpath(os.path.join(ws, rel))
+        if target != ws and not target.startswith(ws + os.sep):
+            raise HTTPException(400, "bad_path")
+        if os.path.exists(target):
+            raise HTTPException(409, "already_exists")
+        os.makedirs(os.path.dirname(target) or ws, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(body.content or "")
+        return {"path": os.path.relpath(target, ws)}
 
     # ---------- 个人助手：文件夹授权 / 待办 / 提醒（M5）----------
     @app.get("/folders")
@@ -559,7 +767,9 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
 
     @app.put("/settings")
     async def put_settings(body: SettingsIn, request: Request):
-        return {"settings": request.app.state.settings.update(**body.model_dump(exclude_none=True))}
+        s = request.app.state.settings.update(**body.model_dump(exclude_none=True))
+        _apply_proxy(request.app)  # 代理改了即时生效
+        return {"settings": s}
 
     @app.get("/weather")
     async def get_weather_ep(request: Request):  # 日常面板：今天/明天天气 + 建议（手动城市）
@@ -578,6 +788,46 @@ def create_app(*, provider: Any = None, db_path: str | None = None, data_dir: st
                 weather_lat=w["lat"], weather_lon=w["lon"], weather_label=w["label"]
             )
         return w
+
+    # ---------- 技能（导入/渐进披露，design §4.6）----------
+    @app.get("/skills")
+    async def list_skills(request: Request):
+        return {"skills": [
+            {"name": s.name, "description": s.description, "when_to_use": s.when_to_use, "files": s.files}
+            for s in request.app.state.skills.list()
+        ]}
+
+    @app.get("/skills/{name}")
+    async def get_skill(name: str, request: Request):
+        sk = request.app.state.skills.get(name)
+        if sk is None:
+            raise HTTPException(404, "skill_not_found")
+        return {"name": sk.name, "description": sk.description, "when_to_use": sk.when_to_use,
+                "body": sk.body, "files": sk.files, "dir": sk.dir}
+
+    @app.post("/skills/install", status_code=201)
+    async def install_skill(body: SkillInstallIn, request: Request):  # 安装技能包（选含 SKILL.md 的文件夹）
+        try:
+            sk = request.app.state.skills.install(body.path)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"install_failed: {e}") from e
+        return {"name": sk.name, "description": sk.description, "when_to_use": sk.when_to_use, "files": sk.files}
+
+    @app.post("/skills", status_code=201)
+    async def add_skill(body: SkillIn, request: Request):
+        if not body.name.strip():
+            raise HTTPException(400, "empty_name")
+        sk = request.app.state.skills.add(
+            body.name, description=body.description or "",
+            when_to_use=body.when_to_use or "", body=body.body or "",
+        )
+        return {"name": sk.name, "description": sk.description, "when_to_use": sk.when_to_use}
+
+    @app.delete("/skills/{name}")
+    async def del_skill(name: str, request: Request):
+        if not request.app.state.skills.delete(name):
+            raise HTTPException(404, "skill_not_found")
+        return {"ok": True}
 
     # ---------- 定时自动化 + review 队列（F6.6）----------
     @app.get("/automations")

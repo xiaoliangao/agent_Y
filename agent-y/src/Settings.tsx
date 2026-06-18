@@ -252,6 +252,16 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                   {settings.weather_label ? `已定位：${settings.weather_label}。` : ''}失焦自动保存。
                 </div>
               </div>
+              <div>
+                <div className="label mb-2">网络代理（搜索 / 取网页 / 天气走它）</div>
+                <input className="field font-mono text-[12.5px]" placeholder="auto（自动读系统代理）/ 留空不用 / http://127.0.0.1:7897"
+                  value={settings.proxy ?? ''} onChange={(e) => setSettings({ ...settings, proxy: e.target.value })}
+                  onBlur={(e) => save({ proxy: e.target.value })} />
+                <div className="text-[11.5px] mt-2 leading-relaxed" style={{ color: 'var(--color-ink-3)' }}>
+                  要访问谷歌学术等需代理的站点，填你的本地代理（如 <span className="font-mono">http://127.0.0.1:7897</span>）。
+                  <span className="font-mono">auto</span> = 自动读系统代理；留空 = 直连。失焦即时生效（回环自连后端不走代理）。
+                </div>
+              </div>
             </div>
           )}
         </div>

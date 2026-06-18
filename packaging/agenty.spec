@@ -6,6 +6,7 @@ import os
 from PyInstaller.utils.hooks import collect_submodules
 
 ROOT = os.path.abspath(os.getcwd())
+APP_VERSION = os.environ.get("AGENTY_VERSION", "0.1.0")  # 与 pyproject 同步；发布时改这里或传环境变量
 
 # uvicorn/anthropic 等有大量动态 import，显式收齐子模块，避免运行时 ModuleNotFound
 hiddenimports = []
@@ -53,7 +54,10 @@ app = BUNDLE(
     name="Agent Y.app",
     icon=os.path.join(ROOT, "packaging", "icon.icns"),
     bundle_identifier="com.agenty.app",
+    version=APP_VERSION,
     info_plist={
+        "CFBundleShortVersionString": APP_VERSION,
+        "CFBundleVersion": APP_VERSION,
         "NSHighResolutionCapable": True,
         "LSBackgroundOnly": False,
         # 允许 WebKit 加载本地 http://127.0.0.1（否则 ATS 拦非 https → 白屏）

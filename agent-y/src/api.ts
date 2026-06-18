@@ -31,6 +31,7 @@ export interface Settings {
   models?: Record<string, string>;  // 按角色配模型 {orchestrator|subagent|judge}（F1.4）
   approval_mode: string | null; sandbox?: string;
   weather_city?: string; weather_label?: string;  // 日常面板天气城市（手动）
+  proxy?: string;  // 网络代理：auto / 空 / http://host:port
 }
 export interface Todo { id: string; text: string; done: boolean; due?: string | null; created_at: string; }
 export interface Folder { id: string; path: string; mode: string; }
@@ -38,10 +39,16 @@ export interface WeatherDay {
   date: string; code: number; text: string;
   tmax: number | null; tmin: number | null; precip_prob: number | null;
 }
+export interface WeatherCurrent {
+  temp: number | null; feels: number | null; humidity: number | null; wind: number | null; code: number; text: string;
+}
+export interface WeatherHour { time: string; temp: number | null; code: number; text: string; }
 export interface Weather {
   ok: boolean; reason?: string; label?: string;
-  today?: WeatherDay | null; tomorrow?: WeatherDay | null; advice?: string;
+  today?: WeatherDay | null; tomorrow?: WeatherDay | null;
+  current?: WeatherCurrent | null; hourly?: WeatherHour[]; advice?: string;
 }
+export interface SkillMeta { name: string; description: string; when_to_use: string; files?: string[]; }
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${BASE}${url}`, init);
@@ -64,7 +71,24 @@ export async function getSessionMessages(sid: string): Promise<{ role: string; c
 export const postApproval = (approvalId: string, decision: "allow" | "deny") =>
   post(`/approvals/${approvalId}`, { decision });
 export const interruptSession = (sid: string) => post(`/sessions/${sid}/interrupt`);
+export const deleteSession = (sid: string) => j(`/sessions/${sid}`, { method: "DELETE" });
+export const renameSession = (sid: string, title: string) =>
+  j(`/sessions/${sid}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ title }) });
 export const revertFile = (sid: string, path: string, content: string) => post(`/sessions/${sid}/revert`, { path, content });
+
+// 编码 IDE：工作区文件树 / 读单文件 / 打开文件夹 / 新建文件
+export interface WorkspaceFile { path: string; size: number; }
+export interface WorkspaceInfo { root: string; name: string; is_custom: boolean; files: WorkspaceFile[]; }
+export const listWorkspaceFiles = (sid: string) =>
+  j<WorkspaceInfo>(`/sessions/${sid}/files`).catch(() => ({ root: '', name: '', is_custom: false, files: [] as WorkspaceFile[] }));
+export const readWorkspaceFile = (sid: string, path: string) =>
+  j<{ path: string; content: string; truncated: boolean }>(`/sessions/${sid}/file?path=${encodeURIComponent(path)}`)
+    .catch(() => ({ path, content: '(读取失败)', truncated: false }));
+export const setWorkspace = (sid: string, path: string) =>
+  post(`/sessions/${sid}/workspace`, { path }) as Promise<{ root: string; name: string; is_custom: boolean }>;
+export const clearWorkspace = (sid: string) => j(`/sessions/${sid}/workspace`, { method: 'DELETE' });
+export const newWorkspaceFile = (sid: string, path: string, content?: string) =>
+  post(`/sessions/${sid}/new-file`, { path, content }) as Promise<{ path: string }>;
 
 // ---------- BYOK / 模型 / 设置 ----------
 export const listProviders = () => j<{ connections: Connection[] }>("/providers").then((d) => d.connections ?? []).catch(() => []);
@@ -87,6 +111,15 @@ export const listFolders = () => j<{ folders: Folder[] }>("/folders").then((d) =
 export const addFolder = (path: string, mode = "read_write") => post("/folders", { path, mode });
 export const deleteFolder = (id: string) => j(`/folders/${id}`, { method: "DELETE" });
 export const getWeather = () => j<Weather>("/weather").catch(() => ({ ok: false } as Weather));
+
+// ---------- 技能（导入/渐进披露）----------
+export const listSkills = () => j<{ skills: SkillMeta[] }>("/skills").then((d) => d.skills ?? []).catch(() => []);
+export const getSkill = (name: string) =>
+  j<{ name: string; description: string; when_to_use: string; body: string }>(`/skills/${encodeURIComponent(name)}`);
+export const addSkill = (s: { name: string; description?: string; when_to_use?: string; body?: string }) => post("/skills", s);
+export const installSkill = (path: string) =>
+  post("/skills/install", { path }) as Promise<{ name: string; description: string; when_to_use: string; files: string[] }>;
+export const deleteSkill = (name: string) => j(`/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
 
 // 原生目录选择：打包的 pywebview 窗口注入了 window.pywebview.api.pick_folder；浏览器 dev 时没有
 export const hasNativeFolderPick = (): boolean =>

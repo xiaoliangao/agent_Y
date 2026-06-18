@@ -245,6 +245,97 @@ async def test_providers_models_settings_endpoints(tmp_path):
         assert (await client.delete(f"/providers/{cid}")).json()["ok"] is True
 
 
+async def test_workspace_files_list_and_read(tmp_path):
+    app = _app(tmp_path, MockProvider([script_text("ok")]))
+    async with _client(app) as client:
+        sid = (await client.post("/sessions", json={"scenario": "coding"})).json()["session_id"]
+        ws = tmp_path / "data" / "sessions" / sid / "workspace"
+        (ws / "sub").mkdir(parents=True)
+        (ws / "a.py").write_text("print(1)\n")
+        (ws / "sub" / "b.txt").write_text("hi")
+        paths = [f["path"] for f in (await client.get(f"/sessions/{sid}/files")).json()["files"]]
+        assert "a.py" in paths and "sub/b.txt" in paths
+        r = (await client.get(f"/sessions/{sid}/file", params={"path": "a.py"})).json()
+        assert r["content"] == "print(1)\n" and r["truncated"] is False
+        assert (await client.get(f"/sessions/{sid}/file", params={"path": "../../../etc/hosts"})).status_code == 400
+        assert (await client.get(f"/sessions/{sid}/file", params={"path": "nope.py"})).status_code == 404
+
+
+async def test_open_folder_and_new_file(tmp_path):
+    app = _app(tmp_path, MockProvider([script_text("ok")]))
+    proj = tmp_path / "myproj"
+    (proj / "src").mkdir(parents=True)
+    (proj / "src" / "main.py").write_text("print('hi')\n")
+    async with _client(app) as client:
+        sid = (await client.post("/sessions", json={"scenario": "coding"})).json()["session_id"]
+        r = (await client.post(f"/sessions/{sid}/workspace", json={"path": str(proj)})).json()
+        assert r["is_custom"] and r["name"] == "myproj"
+        d = (await client.get(f"/sessions/{sid}/files")).json()
+        assert d["is_custom"] and "src/main.py" in [f["path"] for f in d["files"]]
+        nf = await client.post(f"/sessions/{sid}/new-file", json={"path": "notes/todo.md", "content": "# hi"})
+        assert nf.status_code == 201 and nf.json()["path"] == "notes/todo.md"
+        assert (proj / "notes" / "todo.md").read_text() == "# hi"
+        assert (await client.post(f"/sessions/{sid}/new-file", json={"path": "notes/todo.md"})).status_code == 409
+        assert (await client.post(f"/sessions/{sid}/workspace", json={"path": str(tmp_path / "nope")})).status_code == 400
+        assert (await client.delete(f"/sessions/{sid}/workspace")).json()["ok"]
+        assert (await client.get(f"/sessions/{sid}/files")).json()["is_custom"] is False
+
+
+async def test_skills_crud(tmp_path):
+    app = _app(tmp_path, MockProvider([]))
+    async with _client(app) as client:
+        assert (await client.get("/skills")).json()["skills"] == []
+        r = await client.post("/skills", json={"name": "周报", "description": "写周报", "when_to_use": "周五", "body": "按要点写"})
+        assert r.status_code == 201 and r.json()["name"] == "周报"
+        assert any(s["name"] == "周报" for s in (await client.get("/skills")).json()["skills"])
+        assert (await client.get("/skills/周报")).json()["body"] == "按要点写"
+        assert (await client.delete("/skills/周报")).json()["ok"]
+        assert (await client.get("/skills")).json()["skills"] == []
+
+
+async def test_skill_install_endpoint(tmp_path):
+    pkg = tmp_path / "mypkg"
+    pkg.mkdir()
+    (pkg / "SKILL.md").write_text("---\nname: 翻译\ndescription: 中英互译\n---\n\n保持术语一致")
+    (pkg / "glossary.txt").write_text("term=术语")
+    app = _app(tmp_path, MockProvider([]))
+    async with _client(app) as client:
+        r = await client.post("/skills/install", json={"path": str(pkg)})
+        assert r.status_code == 201 and r.json()["name"] == "翻译" and "glossary.txt" in r.json()["files"]
+        assert any(s["name"] == "翻译" for s in (await client.get("/skills")).json()["skills"])
+        assert (await client.post("/skills/install", json={"path": str(tmp_path / "nope")})).status_code == 400
+
+
+def test_resolve_proxy():
+    from server.app import _resolve_proxy
+
+    assert _resolve_proxy("") == "" and _resolve_proxy("   ") == ""
+    assert _resolve_proxy("http://127.0.0.1:7897") == "http://127.0.0.1:7897"
+    assert isinstance(_resolve_proxy("auto"), str)  # auto 读系统代理，可能空也可能有，至少是 str
+
+
+async def test_rename_session(tmp_path):
+    app = _app(tmp_path, MockProvider([]))
+    async with _client(app) as client:
+        sid = (await client.post("/sessions", json={"title": "old"})).json()["session_id"]
+        r = await client.patch(f"/sessions/{sid}", json={"title": "新名字"})
+        assert r.status_code == 200 and r.json()["title"] == "新名字"
+        assert (await client.get(f"/sessions/{sid}")).json()["session"]["title"] == "新名字"
+        assert (await client.patch("/sessions/nope", json={"title": "x"})).status_code == 404
+        assert (await client.patch(f"/sessions/{sid}", json={"title": "  "})).status_code == 400
+
+
+async def test_delete_session(tmp_path):
+    app = _app(tmp_path, MockProvider([]))
+    async with _client(app) as client:
+        sid = (await client.post("/sessions", json={"title": "t"})).json()["session_id"]
+        assert any(s["id"] == sid for s in (await client.get("/sessions")).json()["sessions"])
+        assert (await client.delete(f"/sessions/{sid}")).json()["ok"]
+        assert (await client.get(f"/sessions/{sid}")).status_code == 404
+        assert all(s["id"] != sid for s in (await client.get("/sessions")).json()["sessions"])
+        assert (await client.delete("/sessions/nope")).status_code == 404
+
+
 async def test_serves_frontend_when_present(tmp_path):
     fe = tmp_path / "fe"
     fe.mkdir()

@@ -64,6 +64,21 @@ async def test_get_weather_geocodes_then_forecasts(monkeypatch):
     assert w["today"]["text"] == "晴" and w["tomorrow"]["text"] == "小雨"
 
 
+def test_parse_current_and_hourly():
+    data = {
+        "current": {"time": "2026-06-17T13:00", "temperature_2m": 26, "apparent_temperature": 28,
+                    "relative_humidity_2m": 55, "wind_speed_10m": 12, "weather_code": 2},
+        "hourly": {"time": ["2026-06-17T12:00", "2026-06-17T13:00", "2026-06-17T14:00", "2026-06-17T15:00"],
+                   "temperature_2m": [25, 26, 27, 27], "weather_code": [1, 2, 0, 0]},
+    }
+    cur = weather.parse_current(data)
+    assert cur["temp"] == 26 and cur["humidity"] == 55 and cur["text"] == "多云"
+    hrs = weather.parse_hourly(data, n=3)
+    assert [h["time"] for h in hrs] == ["13:00", "14:00", "15:00"]  # 从当前时刻起
+    assert hrs[1]["text"] == "晴"
+    assert weather.parse_current({}) is None and weather.parse_hourly({}) == []
+
+
 async def test_get_weather_no_city():
     w = await weather.get_weather(city="")
     assert not w["ok"] and w["reason"] == "no_city"

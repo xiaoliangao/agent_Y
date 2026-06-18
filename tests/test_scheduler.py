@@ -6,6 +6,18 @@ from core.scheduler.reminders import check_due
 from core.scheduler.store import SchedulerStore
 
 
+async def test_add_todo_and_reminder_tools(tmp_path):
+    from core.tools.todo import AddReminderInput, AddReminderTool, AddTodoInput, AddTodoTool
+
+    s = SchedulerStore(str(tmp_path / "t.db"))
+    res = await AddTodoTool(s).call(AddTodoInput(text="买菜", due="明天"), None, lambda *a: None)
+    assert "买菜" in str(res.data)
+    assert any(t["text"] == "买菜" for t in s.list_todos())
+    res2 = await AddReminderTool(s).call(AddReminderInput(text="开会", fire_at="2026-06-19T15:00"), None, lambda *a: None)
+    assert "开会" in str(res2.data)
+    assert any(r["text"] == "开会" for r in s.list_reminders())
+
+
 def test_todos_crud(tmp_path):
     s = SchedulerStore(str(tmp_path / "sched.db"))
     t = s.add_todo("买菜", due="2026-06-20T09:00:00Z")

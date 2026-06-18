@@ -2,7 +2,7 @@
 name = "agent-y"
 version = "0.1.0"
 description = "会编码、能自进化的个人桌面工作助手（Agent Y）"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "anthropic>=0.40",
     "openai>=1.50",

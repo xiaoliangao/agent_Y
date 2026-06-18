@@ -41,6 +41,19 @@ def parse_ddg(html: str) -> list[tuple[str, str, str]]:
     return out
 
 
+def parse_bing(html: str) -> list[tuple[str, str, str]]:
+    """从 Bing(cn) HTML 抽 (标题, 链接, 摘要)。国内可直连，作 DDG（常被墙/需代理）的兜底。"""
+    out: list[tuple[str, str, str]] = []
+    for block in re.findall(r'<li class="b_algo[^"]*"[^>]*>(.*?)</li>', html, re.S):
+        m = re.search(r'<h2>.*?<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block, re.S)
+        if not m:
+            continue
+        url, title = m.group(1), _untag(m.group(2))
+        sm = re.search(r"<p[^>]*>(.*?)</p>", block, re.S)
+        out.append((title, url, _untag(sm.group(1)) if sm else ""))
+    return out
+
+
 def html_to_text(html: str) -> str:
     html = re.sub(r"<(script|style|noscript)[^>]*>.*?</\1>", "", html, flags=re.S | re.I)
     html = re.sub(r"<br\s*/?>", "\n", html, flags=re.I)
@@ -71,11 +84,24 @@ class WebSearchTool(BaseTool):
         return ValidationResult(ok=True)
 
     async def call(self, inp: WebSearchInput, ctx: ToolContext, on_progress: Callable) -> ToolResult:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers={"User-Agent": _UA}) as c:
-            r = await c.post("https://html.duckduckgo.com/html/", data={"q": inp.query})
-        results = parse_ddg(r.text)[: inp.max_results]
+        headers = {"User-Agent": _UA}
+        results: list[tuple[str, str, str]] = []
+        try:  # 首选 DuckDuckGo
+            async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers=headers) as c:
+                r = await c.post("https://html.duckduckgo.com/html/", data={"q": inp.query})
+            results = parse_ddg(r.text)
+        except Exception:  # noqa: BLE001
+            results = []
+        if not results:  # DDG 不可用（被墙 / 打包后无代理）→ 退到 Bing（国内可直连）
+            try:
+                async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers=headers) as c:
+                    r = await c.get("https://cn.bing.com/search", params={"q": inp.query, "setlang": "zh-CN"})
+                results = parse_bing(r.text)
+            except Exception:  # noqa: BLE001
+                results = []
+        results = results[: inp.max_results]
         if not results:
-            return ToolResult(data=f"没有找到 '{inp.query}' 的结果。")
+            return ToolResult(data=f"没有找到 '{inp.query}' 的结果（搜索引擎暂时不可用）。")
         return ToolResult(data="\n\n".join(f"{i + 1}. {t}\n   {u}\n   {s}" for i, (t, u, s) in enumerate(results)))
 
 

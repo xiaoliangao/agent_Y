@@ -1,52 +1,60 @@
-# Agent Y — 会编码、能自进化的个人桌面工作助手
+# Agent Y
 
-> 本地优先的桌面 AI Agent：自带模型 API（**BYOK** 多 Provider），既能做**编码任务**（沙箱内改代码、跑测试直到通过），也能当**个人工作助手**（待办提醒、本地文件问答、办公文档 Word/PPT/Excel、网络检索起草）。每一步执行**全链路可观测**，并用 **Eval 自进化闭环**越用越准。既是简历项目，也要真能日常自用。
+> 本地优先的个人桌面 AI 助手（macOS）。**自带模型 Key（BYOK，支持 Claude / DeepSeek / OpenAI 兼容端点）**，
+> 既是**日常助手**（对话、待办、天气、本地文件问答、办公文档、网络检索、技能库），也是**编码 IDE**（打开文件夹、读改代码、跑测试、彩色 diff 审阅）。
+> 数据只存在你本机，API Key 进系统钥匙串。
 
-> **产品重心**：编码为锤（自进化的客观锚点）、助手紧随。
-> **设计指北针**：站在 harness / loop / context engineering + 自进化 + memory 的优秀论文与开源项目，以及 Claude Code 源码（`cc-resourcecode/`）行级走读这些"巨人肩膀"上。
+---
 
-## 开发阶段（软件开发六阶段）
+## 下载安装
 
-| 阶段 | 状态 | 产出 |
-|---|---|---|
-| ① 需求分析 | ✅ **定稿** | `docs/PRD.md` v1.0 + §8 原型图 |
-| ② 系统设计 | 🚧 **进行中** | `docs/design.md`（架构 / 接口契约 / 数据模型 / M1 拆解）|
-| ③ 编码开发 | 🚧 **M1 完成 + M2 后端进行中** | M1：内核+CLI（DeepSeek 真机实测）；M2：FastAPI server/SSE/会话持久化/审批；**37 测试通过** |
-| ④ 测试 | ⬜ | 测试用例 / 报告 |
-| ⑤ 部署上线 | ⬜ | 打包 `.app` / 部署文档 |
-| ⑥ 运维维护 | ⬜ | 监控 / 迭代 |
+1. 到 [**Releases**](../../releases) 下载最新的 `Agent-Y-x.y.z.dmg`。
+2. 双击打开，把 **Agent Y** 拖进 **Applications**。
+3. 首次打开：在「应用程序」里**右键 Agent Y → 打开**（应用未做 Apple 签名，需放行一次；之后正常双击）。
 
-## 文档索引（改动前先读对应文档）
+> 想后台常驻：关掉窗口会**收进菜单栏**（顶部 **Y** 图标），后端继续跑（定时提醒不断）；点图标可重新开窗，「退出」才真正关闭。
 
-| 文档 | 作用 |
-|---|---|
-| [`docs/HANDOVER.md`](docs/HANDOVER.md) | **🤝 交接文档：接手先读这份** —— 现状 / 五分钟上手 / 代码地图 / 关键决策 / 已完成vs待办 / 下一步 / 安全注意 |
-| [`docs/PRD.md`](docs/PRD.md) | **需求**：目标 / 用户故事 / 功能 / 原型图 / 里程碑 / MVP DoD / 决策。技术栈与范围以此为准 |
-| [`docs/design.md`](docs/design.md) | **系统设计**：架构、**§4 接口契约**（前后端 REST+SSE / Provider / Tool / Sandbox / Memory）、数据模型、M1 拆解。两人协作的冻结面 |
-| [`docs/research.md`](docs/research.md) | **调研**：memory / 自进化 / harness·loop·context engineering 业界做法 + OpenAI 侧复核 + 术语表，带引用 |
-| [`docs/code-study-cc.md`](docs/code-study-cc.md) | **源码借鉴**：Claude Code 6 子系统行级走读 + Agent Y 借鉴/忽略清单 |
-| [`docs/dev-setup.md`](docs/dev-setup.md) | **开发/运行指南**：安装、跑测试、CLI、**Docker 沙箱**、排错、协作约定 |
-| [`docs/m1-issues.md`](docs/m1-issues.md) | M1 任务清单（13 项，可转 GitHub Issues）|
-| [`docs/plan.md`](docs/plan.md) | 早期落地计划，**已被 PRD/design 取代**，留作历史参考 |
+## 首次使用
 
-## 快速开始（M1）
+1. 打开后点左下「**设置**」→「模型连接」→ 填一个 Provider 的 **API Key**（Claude 官方 / DeepSeek / Kimi / OpenAI / 本地 Ollama…），选默认模型，测连接。
+2. （可选）「人设与偏好」里填**天气城市**、按角色配模型。
+3. 开始用：
+   - **助手**：直接对话；右侧是今日天气 + 待办；📎 可授权一个文件夹让它读。
+   - **编码**：切到「编码」进入 IDE —— 打开文件夹 / 新建文件 / 看代码（语法高亮）/ agent 改动自动高亮成 diff，可保留或撤销。
+   - **技能**：左栏「技能」可**安装技能包**（含 `SKILL.md` 的文件夹，可带脚本）；遇到相关任务，助手会自动调用。
+   - **自动化**：定时跑任务、产出进待审队列。
+
+## 能做什么
+
+- **日常助手**：对话、待办/提醒、天气与出行建议、授权目录内的文件问答、Word/PPT/Excel 生成、网络检索与起草。
+- **编码 IDE**：打开任意项目文件夹，读/改/跑测试；彩色 diff 逐文件保留或撤销；可切 Docker 沙箱隔离。
+- **技能（渐进披露）**：装好的技能平时只占极小上下文，命中任务才加载完整步骤（含运行附带脚本）。
+- **可观测 + 自进化 Eval**：执行全程可追踪；编码任务可跑 Eval、据失败自动改进（CLI）。
+- **隐私**：全本地，Key 进钥匙串；联网仅限你触发的检索 / 天气。
+
+## 数据位置
+
+所有运行数据在 **`~/.agenty/`**：会话/消息(`agenty.db`)、待办与自动化(`scheduler.db`)、连接(`providers.db`，**不含 Key**)、设置(`settings.json`)、记忆(`memory/`)、技能(`skills/`)、授权目录(`folders.json`)、日志(`desktop.log`)。**API Key 只在 macOS 钥匙串**。备份直接拷该目录即可。
+
+---
+
+## 从源码构建（开发者）
 
 ```bash
-pip install -e ".[dev]"          # 安装
-pytest -q                        # 27 个测试应全过
-python scripts/demo_loop.py      # 离线看 agent loop 调工具→回灌→完成（无需 API/Docker）
+# 环境：macOS、Node 18+、Python 3.10+（推荐 conda 环境）
+pip install -e ".[dev]"        # 装依赖
+pytest -q                      # 跑测试
 
-# 接真模型跑编码任务（修复一个故意写错的测试）：
-export ANTHROPIC_API_KEY=sk-...
-python -m cli.main run "修复 calculator.py 里失败的测试" --workspace examples/fix_failing_test --yes
+# 打成安装包（产物 dist/Agent-Y-<版本>.dmg）：
+bash scripts/build_dmg.sh      # 内部会先构建前端 + .app 再打 dmg
 ```
 
-## 技术栈（详见 PRD / design）
+打 `v*` 标签会触发 `.github/workflows/release.yml`，在 GitHub Actions(macOS) 上自动构建 `.dmg` 并挂到对应 Release：
 
-Python + FastAPI 核心 · `anthropic` + `openai`（兼容端点）· Pydantic（工具 schema）· Docker（沙箱）· Langfuse（可观测）· `keyring`（密钥）· Web 前端 + pywebview → 打包 macOS `.app`/`.dmg`（不做语言重写）。
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
 
-## 说明
+技术栈：Python + FastAPI 内核 · `anthropic`/`openai`(兼容端点) · Pydantic · Docker(沙箱) · `keyring`(密钥) · Web 前端(Vite/React) + pywebview/rumps → PyInstaller 打包 `.app`/`.dmg`。
 
-- `cc-resourcecode/` 是 Claude Code 源码，**仅本地学习参考、已 gitignore**，不纳入版本控制。
-- `docs/CLAUDE-FABLE-5.md` 为参考材料（模型系统提示词），建议归入 `references/`（待团队确认）。
-- 团队：2 人（作者 + 1 位同事）；分工见 `design.md §8.4`（待确认）。
+更多设计/约定见 [`docs/`](docs/)：`HANDOVER.md`（上手）、`PRD.md`（需求）、`design.md`（架构与接口契约）、`packaging.md`（打包细节）、`dev-setup.md`（开发/Docker/排错）。

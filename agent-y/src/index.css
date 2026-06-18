@@ -19,7 +19,99 @@
   --color-gold-2: #cd7a5d;
   --color-danger: #bf4f3d;
   --color-ok: #5b8c6e;
+  --diff-add: rgba(91,140,110,0.13);
+  --diff-del: rgba(191,79,61,0.11);
 }
+
+/* 编码模式：纯黑 IDE —— 干净中性的近黑面板，保留陶土橙强调。
+   只重写 CSS 变量，整窗所有面板自动转深。 */
+.theme-ide {
+  /* 高度阶梯：编辑器画布最深(凹) → 面板更亮(浮) → elevated 最亮(激活/悬停) */
+  --color-bg: #0a0a0c;       /* 编辑器画布（最深，凹陷感） */
+  --color-panel: #161619;    /* 侧栏/标签栏/终端（浮起一层） */
+  --color-elevated: #232329; /* 激活标签/悬停/输入（最亮一层） */
+  --color-line: #1e1e23;     /* 极淡分界：主要靠明暗差分区，线只作收边 */
+  --color-line-2: #2c2c33;   /* 输入框等需要看得见的边 */
+  --color-ink: #e7e7ea;
+  --color-ink-2: #9a9aa2;
+  --color-ink-3: #6a6a72;
+  --color-gold: #e0905a;
+  --color-gold-2: #ea9d68;
+  --color-danger: #e0705a;
+  --color-ok: #7fb087;
+  --diff-add: rgba(127,176,135,0.15);
+  --diff-del: rgba(224,112,90,0.15);
+  color: var(--color-ink);
+  background: var(--color-bg);
+}
+
+/* 助手模式：手绘笔记本风 —— 奶茶格纸 + 手写体 + 不规则边框卡片 + 硬阴影。 */
+.theme-paper {
+  --color-bg: #fdf8f0;
+  --color-panel: #fffef9;
+  --color-elevated: #fff9e6;
+  --color-line: rgba(45,41,38,0.14);
+  --color-line-2: #2d2926;
+  --color-ink: #2d2926;
+  --color-ink-2: #6b7280;
+  --color-ink-3: #9ca3af;
+  --color-gold: #f4a261;
+  --color-gold-2: #e76f51;
+  --color-danger: #e76f51;
+  --color-ok: #2a9d8f;
+  font-family: 'Comic Sans MS', 'Chalkboard SE', 'Marker Felt', cursive;
+  color: var(--color-ink);
+  background:
+    radial-gradient(circle at 18% 16%, rgba(244,162,97,0.10) 0%, transparent 46%),
+    radial-gradient(circle at 84% 86%, rgba(106,159,181,0.10) 0%, transparent 46%),
+    repeating-linear-gradient(0deg, transparent, transparent 28px, rgba(45,41,38,0.035) 28px, rgba(45,41,38,0.035) 29px),
+    repeating-linear-gradient(90deg, transparent, transparent 28px, rgba(45,41,38,0.02) 28px, rgba(45,41,38,0.02) 29px),
+    #fdf8f0;
+}
+.theme-paper .font-serif { font-family: 'Comic Sans MS', 'Chalkboard SE', 'Marker Felt', cursive; }
+.sketch { font-family: 'Comic Sans MS', 'Chalkboard SE', 'Marker Felt', cursive; }
+.hd-card {
+  background: #fffef9;
+  border-radius: 255px 15px 225px 15px/15px 225px 15px 255px;
+  border: 2px solid #2d2926;
+  box-shadow: 4px 4px 0 #2d2926;
+}
+.hd-soft {  /* 较小元素的手绘块：圆角小、阴影浅 */
+  border-radius: 12px 3px 10px 3px/3px 10px 3px 12px;
+  border: 1.5px solid #2d2926;
+  box-shadow: 2px 2px 0 rgba(45,41,38,0.18);
+}
+.hd-bubble-l { border-radius: 15px 255px 15px 225px/225px 15px 255px 15px; }  /* 助手气泡 */
+.hd-bubble-r { border-radius: 255px 15px 225px 15px/15px 225px 15px 255px; }  /* 用户气泡 */
+
+/* 助手/对话里的 Markdown 渲染（继承气泡字色/字号，明暗主题通用） */
+.md { line-height: 1.7; word-break: break-word; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 .55em; }
+.md ul, .md ol { margin: .3em 0 .6em; padding-left: 1.4em; }
+.md ul { list-style: disc; } .md ol { list-style: decimal; }
+.md li { margin: .15em 0; }
+.md h1, .md h2, .md h3, .md h4 { font-weight: 600; margin: .7em 0 .35em; line-height: 1.3; }
+.md h1 { font-size: 1.22em; } .md h2 { font-size: 1.12em; } .md h3 { font-size: 1.04em; }
+.md strong { font-weight: 600; }
+.md a { color: var(--color-gold); text-decoration: underline; }
+.md code { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace; font-size: .88em;
+  background: rgba(127,127,127,0.16); padding: .08em .36em; border-radius: 4px; }
+.md pre { background: rgba(127,127,127,0.13); padding: .7em .8em; border-radius: 8px; overflow-x: auto; margin: .5em 0; }
+.md pre code { background: none; padding: 0; font-size: .85em; line-height: 1.55; }
+.md blockquote { border-left: 2px solid var(--color-line-2); padding-left: .8em; margin: .5em 0; color: var(--color-ink-2); }
+.md hr { border: none; border-top: 1px solid var(--color-line); margin: .8em 0; }
+.md table { border-collapse: collapse; margin: .5em 0; font-size: .95em; }
+.md th, .md td { border: 1px solid var(--color-line); padding: .25em .55em; text-align: left; }
+.md th { background: rgba(127,127,127,0.08); font-weight: 600; }
+
+/* IDE 面板拖拽分隔条：平时一条发丝线，悬停/拖动变陶土橙 */
+.rs { position: relative; }
+.rs::after { content: ''; position: absolute; background: var(--color-line); transition: background .12s; }
+.rs-col::after { inset: 0 2px; }
+.rs-row::after { inset: 2px 0; }
+.rs:hover::after { background: var(--color-gold); }
 
 * { border-color: var(--color-line); }
 
